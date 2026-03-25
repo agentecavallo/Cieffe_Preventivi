@@ -8,8 +8,6 @@ import json
 from fpdf import FPDF
 from datetime import datetime
 from io import BytesIO
-import smtplib
-from email.message import EmailMessage
 from PIL import Image
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -22,29 +20,6 @@ def arrotonda(valore):
     Es. 23.555 -> 23.56
     """
     return float(Decimal(str(valore)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-
-# =========================================================
-# --- CONFIGURAZIONE EMAIL PER ONEDRIVE/DRIVE ---
-# =========================================================
-EMAIL_MITTENTE = "agentecavallo@gmail.com"  
-PASSWORD_APP = "ciqnxbsqttnchoyo"            
-EMAIL_DESTINATARIO = "agentecavallo@gmail.com" 
-
-def invia_pdf_via_email(pdf_bytes, nome_file):
-    msg = EmailMessage()
-    msg['Subject'] = f"Nuovo Preventivo: {nome_file}"
-    msg['From'] = EMAIL_MITTENTE
-    msg['To'] = EMAIL_DESTINATARIO
-    msg.set_content("In allegato il nuovo preventivo/ordine generato dall'app. Power Automate lo salverà su OneDrive/Drive.")
-    msg.add_attachment(pdf_bytes, maintype='application', subtype='pdf', filename=nome_file)
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(EMAIL_MITTENTE, PASSWORD_APP)
-            server.send_message(msg)
-        return True, "✅ Inviato con successo a OneDrive (via Email)!"
-    except Exception as e:
-        return False, f"⚠️ Errore durante l'invio: {e}"
 
 # =========================================================
 # --- GESTIONE ARCHIVIO LOCALE (SENZA API KEY) ---
@@ -207,9 +182,6 @@ def aggiorna_prezzi_automaticamente():
         st.session_state['msg_successo'] = "🔄 Prezzi ricalcolati in base ai nuovi sconti!"
 
 def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
-    if 'pdf_pronto' in st.session_state and 'nome_file_pronto' in st.session_state:
-        succ_em, msg_em = invia_pdf_via_email(st.session_state['pdf_pronto'], st.session_state['nome_file_pronto'])
-        st.session_state['esito_email'] = (succ_em, msg_em)
     succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg)
     st.session_state['esito_cloud'] = (succ_cl, msg_cl)
 
@@ -264,7 +236,7 @@ def callback_aggiungi_generico(articolo, img, normativa, prezzo):
 
 def callback_svuota_tutto():
     st.session_state['carrello'] = []
-    for k in ['pdf_pronto', 'esito_cloud', 'esito_email']:
+    for k in ['pdf_pronto', 'esito_cloud']:
         st.session_state.pop(k, None)
 
 def callback_elimina_riga(idx):
@@ -350,14 +322,15 @@ else:
 # =========================================================
 michelone_logo = "logo.png"
 logo_html = ""
+# HO MODIFICATO QUI LA LARGHEZZA: 300px invece di 100px
 if os.path.exists(michelone_logo):
     with open(michelone_logo, "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode()
-    logo_html = f'<img src="data:image/png;base64,{encoded_string}" style="width: 100px; border-radius: 8px; margin-left: 100px;">'
+    logo_html = f'<img src="data:image/png;base64,{encoded_string}" style="width: 300px; border-radius: 8px; margin-left: 100px;">'
 elif os.path.exists("logo.jpg"):
     with open("logo.jpg", "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode()
-    logo_html = f'<img src="data:image/jpeg;base64,{encoded_string}" style="width: 100px; border-radius: 8px; margin-left: 100px;">'
+    logo_html = f'<img src="data:image/jpeg;base64,{encoded_string}" style="width: 300px; border-radius: 8px; margin-left: 100px;">'
 
 st.markdown(f'<div style="display: flex; align-items: center; margin-bottom: 20px;"><h1 style="margin: 0;">📄 OFFERTE & ORDINI</h1>{logo_html}</div>', unsafe_allow_html=True)
 
@@ -522,7 +495,6 @@ if st.session_state['carrello']:
     with c_p4:
         if st.button("📄 Prepara PDF", use_container_width=True, type="secondary"):
             st.session_state.pop('esito_cloud', None)
-            st.session_state.pop('esito_email', None)
             
             with st.spinner("Generazione PDF in corso..."):
                 raggruppo = {}
@@ -708,7 +680,7 @@ if st.session_state['carrello']:
         sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
         
         st.download_button(
-            label="⬇️ Scarica PDF, Salva in Archivio e Invia Email 📧",
+            label="⬇️ Scarica PDF e Salva in Archivio 💾",
             data=st.session_state['pdf_pronto'],
             file_name=st.session_state['nome_file_pronto'],
             mime="application/pdf",
@@ -721,7 +693,3 @@ if st.session_state['carrello']:
         if 'esito_cloud' in st.session_state:
             if st.session_state['esito_cloud'][0]: st.success(st.session_state['esito_cloud'][1])
             else: st.error(st.session_state['esito_cloud'][1])
-            
-        if 'esito_email' in st.session_state:
-            if st.session_state['esito_email'][0]: st.success(st.session_state['esito_email'][1])
-            else: st.error(st.session_state['esito_email'][1])
