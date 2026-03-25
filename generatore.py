@@ -47,27 +47,24 @@ def invia_pdf_via_email(pdf_bytes, nome_file):
         return False, f"⚠️ Errore durante l'invio: {e}"
 
 # =========================================================
-# --- GESTIONE CLOUD JSONBIN PER I PREVENTIVI ---
+# --- GESTIONE ARCHIVIO LOCALE (SENZA API KEY) ---
 # =========================================================
-def carica_storico_cloud():
-    if "JSONBIN_API_KEY" not in st.secrets or "JSONBIN_BIN_ID" not in st.secrets:
+FILE_STORICO = "storico_preventivi.json"
+
+def carica_storico():
+    if not os.path.exists(FILE_STORICO):
         return {}
     try:
-        url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_BIN_ID']}/latest"
-        headers = {'X-Master-Key': st.secrets['JSONBIN_API_KEY']}
-        risposta = requests.get(url, headers=headers)
-        if risposta.status_code == 200:
-            return risposta.json().get('record', {})
-        return {}
+        with open(FILE_STORICO, "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return {}
 
-def salva_preventivo_cloud(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
+def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
     if not cliente: return False, "⚠️ Inserisci almeno il Nome Cliente."
     if not carrello: return False, "⚠️ Il carrello è vuoto."
-    if "JSONBIN_API_KEY" not in st.secrets: return False, "⚠️ Chiavi API mancanti."
 
-    storico = carica_storico_cloud()
+    storico = carica_storico()
     ora_attuale = datetime.now()
     
     id_univoco = None
@@ -104,35 +101,28 @@ def salva_preventivo_cloud(cliente, referente, note, carrello, pag, trasp, val, 
     }
 
     try:
-        url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_BIN_ID']}"
-        headers = {'Content-Type': 'application/json', 'X-Master-Key': st.secrets['JSONBIN_API_KEY']}
-        risposta = requests.put(url, json=storico, headers=headers)
-        if risposta.status_code == 200:
-            return True, "✅ Preventivo salvato/aggiornato in Archivio!"
-        return False, f"⚠️ Errore API: {risposta.status_code}"
+        with open(FILE_STORICO, "w", encoding="utf-8") as f:
+            json.dump(storico, f, indent=4)
+        return True, "✅ Preventivo salvato in Archivio!"
     except Exception as e:
-        return False, f"⚠️ Errore di connessione: {e}"
+        return False, f"⚠️ Errore di salvataggio: {e}"
 
-def elimina_preventivo_cloud(id_univoco):
-    if "JSONBIN_API_KEY" not in st.secrets: return False, "⚠️ Chiavi API mancanti."
-    storico = carica_storico_cloud()
+def elimina_preventivo(id_univoco):
+    storico = carica_storico()
     if id_univoco in storico:
         del storico[id_univoco]  
         try:
-            url = f"https://api.jsonbin.io/v3/b/{st.secrets['JSONBIN_BIN_ID']}"
-            headers = {'Content-Type': 'application/json', 'X-Master-Key': st.secrets['JSONBIN_API_KEY']}
-            risposta = requests.put(url, json=storico, headers=headers)
-            if risposta.status_code == 200:
-                return True, f"✅ Preventivo eliminato!"
-            return False, f"⚠️ Errore API: {risposta.status_code}"
+            with open(FILE_STORICO, "w", encoding="utf-8") as f:
+                json.dump(storico, f, indent=4)
+            return True, f"✅ Preventivo eliminato!"
         except Exception as e:
-            return False, f"⚠️ Errore di connessione: {e}"
+            return False, f"⚠️ Errore durante l'eliminazione: {e}"
     return False, "⚠️ Preventivo non trovato."
 
 # =========================================================
 # --- INIZIALIZZAZIONE APP E DATI ---
 # =========================================================
-st.set_page_config(page_title="Generatore Preventivi", layout="wide", page_icon="📄")
+st.set_page_config(page_title="Generatore Preventivi CIEFFE", layout="wide", page_icon="📄")
 
 st.markdown("""
 <style>
@@ -144,7 +134,6 @@ button[kind="primary"]:hover { background-color: #45a049 !important; }
 
 if 'carrello' not in st.session_state: st.session_state['carrello'] = []
 
-# Inizializzazione default campi di testo commerciali
 if 'pagamento_input' not in st.session_state: st.session_state['pagamento_input'] = "Solito in uso"
 if 'trasporto_input' not in st.session_state: st.session_state['trasporto_input'] = "P.to Franco 300,00"
 if 'validita_input' not in st.session_state: st.session_state['validita_input'] = "30.06.2026"
@@ -221,11 +210,11 @@ def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc
     if 'pdf_pronto' in st.session_state and 'nome_file_pronto' in st.session_state:
         succ_em, msg_em = invia_pdf_via_email(st.session_state['pdf_pronto'], st.session_state['nome_file_pronto'])
         st.session_state['esito_email'] = (succ_em, msg_em)
-    succ_cl, msg_cl = salva_preventivo_cloud(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg)
+    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg)
     st.session_state['esito_cloud'] = (succ_cl, msg_cl)
 
-def callback_salva_solo_cloud(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
-    succ, msg = salva_preventivo_cloud(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg)
+def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
+    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg)
     if succ: st.session_state['msg_successo'] = msg
     else: st.session_state['msg_errore'] = msg
 
@@ -306,7 +295,6 @@ sc_atg3 = col_atg3.number_input("Sc. ATG 3 %", 0.0, 100.0, 0.0, key="sc_atg3", o
 st.sidebar.divider()
 st.sidebar.header("⚖️ Condizioni Commerciali")
 
-# Sostituite le selezioni combinate con semplici caselle di testo
 campo_pagamento = st.sidebar.text_input("Pagamento:", key="pagamento_input")
 campo_trasporto = st.sidebar.text_input("Trasporto:", key="trasporto_input")
 campo_validita = st.sidebar.text_input("Validità Offerta:", key="validita_input")
@@ -316,7 +304,7 @@ note_preventivo = st.sidebar.text_area("📝 Note Aggiuntive:", height=200, key=
 
 st.sidebar.divider()
 st.sidebar.header("📂 Archivio Preventivi")
-storico = carica_storico_cloud()
+storico = carica_storico()
 
 if storico:
     ricerca_cliente = st.sidebar.text_input("🔍 Cerca cliente salvato:", placeholder="Digita per filtrare...")
@@ -343,7 +331,7 @@ if storico:
             col_si, col_no = st.sidebar.columns(2)
             with col_si:
                 if st.button("✔️ SÌ", use_container_width=True, type="primary"):
-                    successo_elim, msg_elim = elimina_preventivo_cloud(scelta_prev)
+                    successo_elim, msg_elim = elimina_preventivo(scelta_prev)
                     st.session_state.pop('conferma_eliminazione_id', None)
                     if successo_elim:
                         st.sidebar.success(msg_elim)
@@ -360,10 +348,14 @@ else:
 # =========================================================
 # --- MAIN ---
 # =========================================================
-michelone_logo = "michelone.jpg"
+michelone_logo = "logo.png"
 logo_html = ""
 if os.path.exists(michelone_logo):
     with open(michelone_logo, "rb") as image_file:
+        encoded_string = base64.b64encode(image_file.read()).decode()
+    logo_html = f'<img src="data:image/png;base64,{encoded_string}" style="width: 100px; border-radius: 8px; margin-left: 100px;">'
+elif os.path.exists("logo.jpg"):
+    with open("logo.jpg", "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode()
     logo_html = f'<img src="data:image/jpeg;base64,{encoded_string}" style="width: 100px; border-radius: 8px; margin-left: 100px;">'
 
@@ -523,7 +515,7 @@ if st.session_state['carrello']:
         st.button(
             "💾 Salva Preventivo", 
             use_container_width=True, 
-            on_click=callback_salva_solo_cloud,
+            on_click=callback_salva_solo,
             args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg)
         )
             
@@ -560,7 +552,20 @@ if st.session_state['carrello']:
                     def header(self):
                         for f in ["logo.png", "logo.jpg", "logo.jpeg"]:
                             if os.path.exists(f):
-                                self.image(f, 5, 4, 70) 
+                                try:
+                                    with Image.open(f) as img:
+                                        if img.mode == 'RGBA':
+                                            background = Image.new('RGB', img.size, (255, 255, 255))
+                                            background.paste(img, mask=img.split()[3]) 
+                                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_logo:
+                                                background.save(tmp_logo.name, 'JPEG')
+                                                logo_path = tmp_logo.name
+                                            self.image(logo_path, 5, 4, 70) 
+                                            os.remove(logo_path)
+                                        else:
+                                            self.image(f, 5, 4, 70) 
+                                except Exception:
+                                    self.image(f, 5, 4, 70)
                                 break
                                 
                         if self.page_no() == 1:
@@ -680,7 +685,6 @@ if st.session_state['carrello']:
                 pdf.multi_cell(0, 3, disclaimer, align="C")
                 pdf.set_text_color(0, 0, 0)
 
-                # Salva il PDF in memoria (ottimizzato bypassando pypdf)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
                     pdf.output(tmp_pdf.name)
                     preventivo_path = tmp_pdf.name
