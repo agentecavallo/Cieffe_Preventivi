@@ -5,8 +5,6 @@ import base64
 import os
 import tempfile
 import json
-import re
-import difflib
 from fpdf import FPDF
 from datetime import datetime
 from io import BytesIO
@@ -14,8 +12,6 @@ import smtplib
 from email.message import EmailMessage
 from PIL import Image
 from decimal import Decimal, ROUND_HALF_UP
-import google.generativeai as genai
-from pypdf import PdfWriter, PdfReader
 
 # =========================================================
 # --- FUNZIONE DI ARROTONDAMENTO COMMERCIALE ---
@@ -26,33 +22,6 @@ def arrotonda(valore):
     Es. 23.555 -> 23.56
     """
     return float(Decimal(str(valore)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-
-# =========================================================
-# --- RICERCA INTELLIGENTE SCHEDE TECNICHE ---
-# =========================================================
-@st.cache_data
-def get_tutte_le_schede(cartella="schede"):
-    """Recupera la lista di tutti i file PDF nella cartella schede"""
-    if not os.path.exists(cartella): return []
-    return sorted([f for f in os.listdir(cartella) if f.lower().endswith('.pdf')])
-
-def trova_scheda_migliore(codice_articolo, lista_file):
-    """Cerca il file PDF più probabile in base al codice."""
-    codice_pulito = codice_articolo.replace("⚠️", "").strip().upper()
-    
-    # 1. Prova a vedere se il codice è contenuto nel nome (es. B0134 in GS_CA-B0134...)
-    for file_name in lista_file:
-        if codice_pulito in file_name.upper():
-            return file_name
-    
-    # 2. Se non lo trova, prova a cercare solo i primi 5 caratteri
-    if len(codice_pulito) >= 5:
-        prefisso = codice_pulito[:5]
-        for file_name in lista_file:
-            if prefisso in file_name.upper():
-                return file_name
-            
-    return None
 
 # =========================================================
 # --- CONFIGURAZIONE EMAIL PER ONEDRIVE/DRIVE ---
@@ -174,8 +143,11 @@ button[kind="primary"]:hover { background-color: #45a049 !important; }
 """, unsafe_allow_html=True)
 
 if 'carrello' not in st.session_state: st.session_state['carrello'] = []
-if 'espositori_selezionati' not in st.session_state: st.session_state['espositori_selezionati'] = []
-if 'schede_associate' not in st.session_state: st.session_state['schede_associate'] = {}
+
+# Inizializzazione default campi di testo commerciali
+if 'pagamento_input' not in st.session_state: st.session_state['pagamento_input'] = "Solito in uso"
+if 'trasporto_input' not in st.session_state: st.session_state['trasporto_input'] = "P.to Franco 300,00"
+if 'validita_input' not in st.session_state: st.session_state['validita_input'] = "30.06.2026"
 
 @st.cache_data
 def carica_dati(path, tipo="base"):
@@ -262,8 +234,8 @@ def esegui_caricamento(d):
     st.session_state['nome_cliente_input'] = d.get('cliente', '')
     st.session_state['nome_referente_input'] = d.get('referente', '')
     st.session_state['note_input'] = d.get('note', '')
-    st.session_state['pagamento_input'] = d.get('pagamento', 'Solito in uso')
-    st.session_state['trasporto_input'] = d.get('trasporto', 'P.to Franco 300,00')
+    st.session_state['pagamento_input'] = d.get('pagamento', '')
+    st.session_state['trasporto_input'] = d.get('trasporto', '')
     st.session_state['validita_input'] = d.get('validita', '30.06.2026')
     st.session_state['sc_base1'] = d.get('sconti_base', [40.0, 10.0, 0.0])[0]
     st.session_state['sc_base2'] = d.get('sconti_base', [40.0, 10.0, 0.0])[1]
@@ -303,7 +275,6 @@ def callback_aggiungi_generico(articolo, img, normativa, prezzo):
 
 def callback_svuota_tutto():
     st.session_state['carrello'] = []
-    st.session_state.pop('schede_associate', None)
     for k in ['pdf_pronto', 'esito_cloud', 'esito_email']:
         st.session_state.pop(k, None)
 
@@ -333,58 +304,15 @@ sc_atg2 = col_atg2.number_input("Sc. ATG 2 %", 0.0, 100.0, 10.0, key="sc_atg2", 
 sc_atg3 = col_atg3.number_input("Sc. ATG 3 %", 0.0, 100.0, 0.0, key="sc_atg3", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
-st.sidebar.header("🎁 Espositori Omaggio")
-col_esp1, col_esp2 = st.sidebar.columns(2)
-col_esp3, col_esp4 = st.sidebar.columns(2)
-
-def seleziona_espositore(nome_file_img):
-    if nome_file_img not in st.session_state['espositori_selezionati']:
-        st.session_state['espositori_selezionati'].append(nome_file_img)
-        st.toast(f"Aggiunto: {nome_file_img.replace('.jpg','')}", icon="✅")
-
-with col_esp1:
-    if st.button("ATG Banco", use_container_width=True): seleziona_espositore("ATG banco.jpg")
-with col_esp2:
-    if st.button("ATG Terra", use_container_width=True): seleziona_espositore("ATG terra.jpg")
-with col_esp3:
-    if st.button("Base Banco", use_container_width=True): seleziona_espositore("Base banco.jpg")
-with col_esp4:
-    if st.button("Base Terra", use_container_width=True): seleziona_espositore("BASE terra.jpg")
-
-if st.session_state['espositori_selezionati']:
-    st.sidebar.markdown("**Espositori inclusi:**")
-    for esp in st.session_state['espositori_selezionati']:
-        st.sidebar.success(f"✅ {esp}")
-    if st.sidebar.button("❌ Rimuovi Tutti"):
-        st.session_state['espositori_selezionati'] = []
-        st.rerun()
-
-st.sidebar.divider()
 st.sidebar.header("⚖️ Condizioni Commerciali")
 
-opzioni_pagamento = ["Solito in uso", "Da concordare", "Ri.Ba. 60 giorni", "Ri.ba. 60/90 giorni"]
-if 'pagamento_input' in st.session_state and st.session_state['pagamento_input'] not in opzioni_pagamento:
-    opzioni_pagamento.append(st.session_state['pagamento_input'])
-
-campo_pagamento = st.sidebar.selectbox("Pagamento:", options=opzioni_pagamento, key="pagamento_input")
-
-opzioni_trasporto = [
-    "P.to Franco 300,00",
-    "P.to Franco 500,00 (per ordini B2B)",
-    "P.to Franco 1000,00",
-    "P.to franco 400,00 (sia Base che ATG)"
-]
-if 'trasporto_input' in st.session_state and st.session_state['trasporto_input'] not in opzioni_trasporto:
-    opzioni_trasporto.append(st.session_state['trasporto_input'])
-
-campo_trasporto = st.sidebar.selectbox("Trasporto:", options=opzioni_trasporto, key="trasporto_input")
-campo_validita = st.sidebar.text_input("Validità Offerta:", value="30.06.2026", key="validita_input")
+# Sostituite le selezioni combinate con semplici caselle di testo
+campo_pagamento = st.sidebar.text_input("Pagamento:", key="pagamento_input")
+campo_trasporto = st.sidebar.text_input("Trasporto:", key="trasporto_input")
+campo_validita = st.sidebar.text_input("Validità Offerta:", key="validita_input")
 
 st.sidebar.divider()
 note_preventivo = st.sidebar.text_area("📝 Note Aggiuntive:", height=200, key="note_input")
-
-# NUOVO: Checkbox per nascondere/mostrare la firma
-includi_firma = st.sidebar.checkbox("✍️ Includi la mia firma nel PDF", value=True, help="Deseleziona per creare un PDF anonimo senza i tuoi contatti (ideale per clienti B2B)")
 
 st.sidebar.divider()
 st.sidebar.header("📂 Archivio Preventivi")
@@ -410,7 +338,6 @@ if storico:
                 st.session_state['conferma_eliminazione_id'] = scelta_prev
                 st.rerun()
                 
-        # Blocco di conferma eliminazione
         if st.session_state.get('conferma_eliminazione_id') == scelta_prev:
             st.sidebar.warning("⚠️ Confermi l'eliminazione?")
             col_si, col_no = st.sidebar.columns(2)
@@ -450,182 +377,6 @@ if 'msg_warning' in st.session_state: st.warning(st.session_state.pop('msg_warni
 if df_base is None and df_atg is None:
     st.warning("⚠️ Nessun file Excel trovato.")
 else:
-    # --- SEZIONE: LETTURA INTELLIGENTE CON GEMINI ---
-    with st.expander("📸 Inserimento Rapido (Intelligenza Artificiale)", expanded=False):
-        if "GEMINI_API_KEY" in st.secrets:
-            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            
-            col_ai1, col_ai2 = st.columns(2)
-            
-            with col_ai1:
-                tipo_analisi = st.radio(
-                    "Cosa vuoi analizzare?",
-                    ["📄 Testo (Lista scritta a mano o stampata)", "👟 Prodotti Reali (Foto di scarpe/guanti)"],
-                    horizontal=False
-                )
-                
-            with col_ai2:
-                metodo_inserimento = st.radio(
-                    "Come vuoi inserire l'immagine?",
-                    ["📂 Carica File dal Dispositivo", "📷 Scatta una Foto Ora"],
-                    horizontal=False
-                )
-
-            foto_caricata = None
-            
-            if metodo_inserimento == "📂 Carica File dal Dispositivo":
-                foto_caricata = st.file_uploader("Seleziona l'immagine", type=['png', 'jpg', 'jpeg'])
-            else:
-                foto_caricata = st.camera_input("Inquadra e scatta la foto")
-            
-            if foto_caricata is not None:
-                st.image(foto_caricata, width=200, caption="Anteprima immagine")
-                if st.button("🧠 Estrai e Metti in Vetrina/Carrello", type="primary"):
-                    with st.spinner("Sto analizzando l'immagine... dammi un secondo!"):
-                        try:
-                            img_pil = Image.open(foto_caricata)
-                            
-                            model = genai.GenerativeModel('gemini-3.1-flash-lite-preview') 
-                            
-                            if "Testo" in tipo_analisi:
-                                prompt = """
-                                Sei un assistente commerciale. Analizza questa immagine che contiene una lista di calzature/articoli.
-                                Estrai il nome del modello e la quantità richiesta (se non c'è quantità, metti 0).
-                                Devi rispondere ESCLUSIVAMENTE con un array JSON valido, senza altro testo.
-                                Usa esattamente questa struttura:
-                                [
-                                  {"articolo": "NOME_MODELLO", "quantita": 10},
-                                  {"articolo": "ALTRO_MODELLO", "quantita": 0}
-                                ]
-                                """
-                            else:
-                                prompt = """
-                                Sei un esperto di calzature antinfortunistiche e guanti da lavoro (brand come Base Protection e ATG). 
-                                Analizza questa fotografia che ritrae dei prodotti fisici reali.
-                                Identifica il nome del modello esatto o quello più probabile per ogni articolo presente nell'immagine.
-                                Conta quanti articoli dello stesso tipo sono visibili.
-                                Devi rispondere ESCLUSIVAMENTE con un array JSON valido, senza altro testo.
-                                Usa esattamente questa struttura:
-                                [
-                                  {"articolo": "NOME_MODELLO", "quantita": 2},
-                                  {"articolo": "ALTRO_MODELLO", "quantita": 1}
-                                ]
-                                """
-                            
-                            risposta = model.generate_content([prompt, img_pil])
-                            testo_generato = risposta.text
-                            
-                            match = re.search(r'\[.*\]', testo_generato, re.DOTALL)
-                            if match:
-                                testo_pulito = match.group(0)
-                            else:
-                                testo_pulito = testo_generato.replace("```json", "").replace("```", "").strip()
-                                
-                            articoli_estratti = json.loads(testo_pulito)
-                            
-                            # --- EASTER EGG: NESSUN ARTICOLO TROVATO ---
-                            if len(articoli_estratti) == 0:
-                                st.session_state['msg_warning'] = "🐜 Michele fai il serio e fai una foto fatta per bene, NUN SEMO QUI A CONTA' E FORMICHE!"
-                                st.rerun()
-                            
-                            trovati = 0
-                            articoli_non_trovati = []
-                            
-                            for item in articoli_estratti:
-                                nome_art = str(item.get('articolo', '')).upper()
-                                try:
-                                    qta = int(item.get('quantita', 0))
-                                except ValueError:
-                                    qta = 0
-                                
-                                dati_articolo = None
-                                catalogo_rif = ""
-                                sconti = (0,0,0)
-                                
-                                match_base = pd.DataFrame()
-                                match_atg = pd.DataFrame()
-                                
-                                if df_base is not None:
-                                    match_base = df_base[df_base['ARTICOLO'].astype(str).str.upper().str.contains(nome_art, na=False, regex=False)]
-                                
-                                if match_base.empty and df_atg is not None:
-                                    match_atg = df_atg[df_atg['ARTICOLO'].astype(str).str.upper().str.contains(nome_art, na=False, regex=False)]
-                                
-                                # --- RICERCA APPROSSIMATIVA (Fuzzy) ---
-                                if match_base.empty and match_atg.empty:
-                                    tutti_articoli = []
-                                    selettore_base = []
-                                    selettore_atg = []
-                                    
-                                    if df_base is not None:
-                                        selettore_base = df_base['ARTICOLO'].astype(str).str.upper().tolist()
-                                        tutti_articoli.extend(selettore_base)
-                                    if df_atg is not None:
-                                        selettore_atg = df_atg['ARTICOLO'].astype(str).str.upper().tolist()
-                                        tutti_articoli.extend(selettore_atg)
-                                    
-                                    simili = difflib.get_close_matches(nome_art, tutti_articoli, n=1, cutoff=0.4)
-                                    if simili:
-                                        nome_art_simile = simili[0]
-                                        if df_base is not None and nome_art_simile in selettore_base:
-                                            match_base = df_base[df_base['ARTICOLO'].astype(str).str.upper() == nome_art_simile]
-                                        if df_atg is not None and nome_art_simile in selettore_atg:
-                                            match_atg = df_atg[df_atg['ARTICOLO'].astype(str).str.upper() == nome_art_simile]
-
-                                if not match_base.empty:
-                                    dati_articolo = match_base.iloc[0]
-                                    catalogo_rif = "Listino Base"
-                                    sconti = (sc1, sc2, sc3)
-                                elif not match_atg.empty:
-                                    dati_articolo = match_atg.iloc[0]
-                                    catalogo_rif = "Listino ATG"
-                                    sconti = (sc_atg1, sc_atg2, sc_atg3)
-                                    
-                                if dati_articolo is not None:
-                                    listino = float(dati_articolo['LISTINO'])
-                                    molt = (1 - sconti[0]/100) * (1 - sconti[1]/100) * (1 - sconti[2]/100)
-                                    netto_calc = arrotonda(listino * molt)
-                                    
-                                    norm = str(dati_articolo.get('NORMATIVA', '')).strip() if catalogo_rif == "Listino Base" else ""
-                                    if norm.lower() in ["nan", "none", "", "nat", "null"]: norm = ""
-                                    
-                                    st.session_state['carrello'].append({
-                                        "Articolo": dati_articolo['ARTICOLO'], 
-                                        "Taglia": "-", 
-                                        "Quantità": qta,
-                                        "Netto U.": f"{netto_calc:.2f} €", 
-                                        "Totale Riga": arrotonda(netto_calc * qta),
-                                        "Immagine": str(dati_articolo.get('IMMAGINE', '')).strip(), 
-                                        "Normativa": norm
-                                    })
-                                    trovati += 1
-                                else:
-                                    st.session_state['carrello'].append({
-                                        "Articolo": f"⚠️ {nome_art} (Verifica Manule)", 
-                                        "Taglia": "-", 
-                                        "Quantità": qta,
-                                        "Netto U.": "0.00 €", 
-                                        "Totale Riga": 0.0,
-                                        "Immagine": "", 
-                                        "Normativa": ""
-                                    })
-                                    articoli_non_trovati.append(nome_art)
-                                    trovati += 1
-                            
-                            if trovati > 0:
-                                st.session_state['msg_successo'] = f"✅ {trovati} articoli inseriti a carrello."
-                                if articoli_non_trovati:
-                                    lista_avvisi = "\n".join([f"- {art}" for art in articoli_non_trovati])
-                                    st.session_state['msg_warning'] = f"⚠️ **Attenzione!** I seguenti articoli letti dall'IA non sono stati trovati a listino e sono stati aggiunti a **0,00 €**:\n{lista_avvisi}"
-                                st.rerun() 
-                                
-                        except Exception as e:
-                            st.error(f"Qualcosa è andato storto nella lettura dell'immagine: {e}")
-        else:
-            st.info("ℹ️ Per usare la lettura da foto, devi inserire `GEMINI_API_KEY = 'la-tua-chiave'` nei file `.streamlit/secrets.toml`.")
-
-    st.divider()
-
     # --- SEZIONE: RICERCA MANUALE ---
     ricerca = st.text_input("🟢 Inserisci nome modello (Ricerca Manuale):", placeholder="Cerca su tutto il catalogo...").upper()
 
@@ -758,38 +509,6 @@ if st.session_state['carrello']:
     
     st.divider()
     
-    # --- GESTIONE SCHEDE TECNICHE ---
-    st.markdown("### 📎 Allegati: Schede Tecniche")
-    allega_schede = st.checkbox("Sì, voglio allegare le schede tecniche in fondo al PDF finale", value=False, key="checkbox_schede")
-    
-    if allega_schede:
-        st.info("💡 Qui sotto puoi vedere quale scheda verrà allegata per ogni modello. Se il sistema ha scelto quella sbagliata, cliccaci sopra per correggerla.")
-        articoli_unici = list(set([r["Articolo"] for r in st.session_state['carrello'] if not str(r["Articolo"]).startswith("⚠️")]))
-        lista_file_schede = get_tutte_le_schede("schede")
-        opzioni_schede = ["--- Nessuna scheda ---"] + lista_file_schede
-        
-        if not lista_file_schede:
-            st.warning("Nessun PDF trovato! Assicurati di aver creato la cartella 'schede' su GitHub e di averci messo dentro i file .pdf")
-        else:
-            for art in articoli_unici:
-                # Se è la prima volta che vede questo articolo, prova ad abbinarlo in automatico
-                if art not in st.session_state['schede_associate']:
-                    match = trova_scheda_migliore(art, lista_file_schede)
-                    st.session_state['schede_associate'][art] = match if match else "--- Nessuna scheda ---"
-                
-                # Trova l'indice del file nella tendina per mostrarlo come predefinito
-                val_attuale = st.session_state['schede_associate'].get(art, "--- Nessuna scheda ---")
-                try: 
-                    idx = opzioni_schede.index(val_attuale)
-                except ValueError: 
-                    idx = 0
-                
-                # Crea la tendina
-                scelta = st.selectbox(f"📝 Scheda per il modello **{art}**:", options=opzioni_schede, index=idx, key=f"sel_scheda_{art}")
-                st.session_state['schede_associate'][art] = scelta
-
-    st.divider()
-    
     c_p1, c_p2, c_p3, c_p4 = st.columns(4)
     
     with c_p1:
@@ -817,8 +536,18 @@ if st.session_state['carrello']:
                 raggruppo = {}
                 for r in st.session_state['carrello']:
                     art = r["Articolo"]
+                    
+                    label_prezzo = "Prezzo Netto:"
+                    if df_base is not None and art in df_base['ARTICOLO'].values:
+                        if sc1 == 0.0 and sc2 == 0.0 and sc3 == 0.0:
+                            label_prezzo = "Prezzo di Listino:"
+                    elif df_atg is not None and art in df_atg['ARTICOLO'].values:
+                        if sc_atg1 == 0.0 and sc_atg2 == 0.0 and sc_atg3 == 0.0:
+                            label_prezzo = "Prezzo di Listino:"
+                            
                     if art not in raggruppo:
-                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto": r["Netto U."], "Normativa": r.get("Normativa", "")}
+                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto": r["Netto U."], "Normativa": r.get("Normativa", ""), "Label": label_prezzo}
+                    
                     if r["Quantità"] > 0:
                         if r["Taglia"] == "-": raggruppo[art]["T"].append(f"Q.tà: {r['Quantità']}pz")
                         else: raggruppo[art]["T"].append(f"Tg{r['Taglia']}: {r['Quantità']}pz")
@@ -866,7 +595,7 @@ if st.session_state['carrello']:
                         pdf.cell(110, 5, f"Normativa: {dati['Normativa']}", ln=1) 
                     
                     pdf.set_font("helvetica", "", 10)
-                    pdf.cell(110, 6, f"Prezzo Netto: {dati['Netto'].replace('€', 'Euro')}", ln=1) 
+                    pdf.cell(110, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1) 
                     
                     pdf.set_font("helvetica", "I", 9)
                     if dati["T"]:
@@ -919,50 +648,6 @@ if st.session_state['carrello']:
                     pdf.cell(0, 10, f"TOTALE GENERALE: {totale_generale:.2f} Euro", ln=1, align="R")
                     pdf.set_font("helvetica", "I", 12)
                     pdf.cell(0, 6, f"(Totale Paia Complessive: {totale_paia_carrello})", ln=1, align="R")
-                
-                if 'espositori_selezionati' in st.session_state and st.session_state['espositori_selezionati']:
-                    pdf.ln(10)
-                    pdf.set_font("helvetica", "B", 14)
-                    pdf.set_fill_color(240, 240, 240)
-                    pdf.cell(0, 10, " ESPOSITORI OMAGGIO INCLUSI ", ln=1, align="C", fill=True)
-                    pdf.ln(5)
-                    
-                    for esp in st.session_state['espositori_selezionati']:
-                        y_inizio = pdf.get_y()
-                        if y_inizio > 200: 
-                            pdf.add_page()
-                            y_inizio = pdf.get_y()
-                            
-                        nome_esp_pulito = esp.replace('.jpg', '').replace('.jpeg', '').replace('.png', '').upper()
-                        pdf.set_font("helvetica", "B", 12)
-                        pdf.cell(0, 8, nome_esp_pulito, ln=1, align="C")
-                        
-                        if os.path.exists(esp):
-                            try:
-                                with Image.open(esp) as img:
-                                    w_px, h_px = img.size
-                                    aspect_ratio = w_px / h_px
-                                    max_w, max_h = 80.0, 80.0 
-                                    
-                                    if aspect_ratio > (max_w / max_h):
-                                        final_w = max_w
-                                        final_h = max_w / aspect_ratio
-                                    else:
-                                        final_h = max_h
-                                        final_w = max_h * aspect_ratio
-                                    
-                                    x_pos = (210 - final_w) / 2 
-                                    y_pos = pdf.get_y() + 2
-                                    pdf.image(esp, x=x_pos, y=y_pos, w=final_w, h=final_h)
-                                    
-                                    pdf.set_y(y_pos + final_h + 8) 
-                            except: 
-                                pdf.ln(5)
-                        else:
-                            pdf.ln(5)
-                        
-                        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-                        pdf.ln(5)
 
                 pdf.ln(5)
                 pdf.set_font("helvetica", "B", 10)
@@ -974,23 +659,18 @@ if st.session_state['carrello']:
                 
                 if note_preventivo:
                     pdf.ln(5)
-                    pdf.set_font("helvetica", "B", 10)
+                    pdf.set_font("helvetica", "B", 12)
                     pdf.cell(0, 6, "Note Aggiuntive:", ln=1)
-                    pdf.set_font("helvetica", "", 10)
+                    pdf.set_font("helvetica", "", 11)
                     pdf.multi_cell(0, 6, note_preventivo)
 
-                if includi_firma:
-                    pdf.ln(15)
-                    
-                    y_corrente = pdf.get_y()
-                    if y_corrente > 265:
-                        pdf.add_page()
-                        
-                    pdf.set_font("helvetica", "B", 11)
-                    pdf.cell(0, 5, "Michele Cavallo", ln=1, align="R")
-                    pdf.set_font("helvetica", "", 10)
-                    pdf.cell(0, 5, "Area Manager Base Protection srl", ln=1, align="R")
-                    pdf.cell(0, 5, "Tel. 3890199088 Mail m.cavallo@baseprotection.com", ln=1, align="R")
+                # --- FIRMA FISSA ---
+                pdf.ln(15)
+                y_corrente = pdf.get_y()
+                if y_corrente > 265:
+                    pdf.add_page()
+                pdf.set_font("helvetica", "B", 11)
+                pdf.cell(0, 5, "CIEFFE snc", ln=1, align="R")
 
                 pdf.set_auto_page_break(auto=False)
                 pdf.set_y(-20) 
@@ -1000,38 +680,13 @@ if st.session_state['carrello']:
                 pdf.multi_cell(0, 3, disclaimer, align="C")
                 pdf.set_text_color(0, 0, 0)
 
-                # --- UNIONE PDF SCHEDE TECNICHE ---
+                # Salva il PDF in memoria (ottimizzato bypassando pypdf)
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
                     pdf.output(tmp_pdf.name)
                     preventivo_path = tmp_pdf.name
 
-                writer = PdfWriter()
-                
-                reader_prev = PdfReader(preventivo_path)
-                for page in reader_prev.pages:
-                    writer.add_page(page)
-
-                schede_aggiunte = 0
-                
-                # Se l'utente ha spuntato il box, incolla i file scelti nei menu a tendina
-                if st.session_state.get("checkbox_schede", False):
-                    articoli_unici = set([r["Articolo"] for r in st.session_state['carrello'] if not str(r["Articolo"]).startswith("⚠️")])
-                    for art in articoli_unici:
-                        nome_scheda = st.session_state['schede_associate'].get(art, "--- Nessuna scheda ---")
-                        if nome_scheda != "--- Nessuna scheda ---":
-                            percorso_scheda = os.path.join("schede", nome_scheda)
-                            if os.path.exists(percorso_scheda):
-                                try:
-                                    reader_scheda = PdfReader(percorso_scheda)
-                                    for page in reader_scheda.pages:
-                                        writer.add_page(page)
-                                    schede_aggiunte += 1
-                                except Exception:
-                                    pass
-
-                output_finale = BytesIO()
-                writer.write(output_finale)
-                pdf_bytes = output_finale.getvalue()
+                with open(preventivo_path, "rb") as f:
+                    pdf_bytes = f.read()
 
                 try: os.remove(preventivo_path)
                 except: pass
@@ -1040,9 +695,6 @@ if st.session_state['carrello']:
                 data_odierna = datetime.now().strftime("%d.%m.%Y")
                 st.session_state['pdf_pronto'] = pdf_bytes
                 st.session_state['nome_file_pronto'] = f"{nome_sicuro}_{data_odierna}.pdf"
-                
-                if schede_aggiunte > 0:
-                    st.toast(f"✅ Ho allegato {schede_aggiunte} schede tecniche!", icon="📚")
 
     if 'pdf_pronto' in st.session_state:
         st.divider()
