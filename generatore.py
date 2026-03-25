@@ -329,13 +329,13 @@ logo_html = ""
 if os.path.exists(michelone_logo):
     with open(michelone_logo, "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode()
-    logo_html = f'<img src="data:image/png;base64,{encoded_string}" style="width: 300px; border-radius: 8px; margin-left: 100px;">'
+    logo_html = f'<img src="data:image/png;base64,{encoded_string}" style="max-width: 300px; width: 100%; border-radius: 8px;">'
 elif os.path.exists("logo.jpg"):
     with open("logo.jpg", "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode()
-    logo_html = f'<img src="data:image/jpeg;base64,{encoded_string}" style="width: 300px; border-radius: 8px; margin-left: 100px;">'
+    logo_html = f'<img src="data:image/jpeg;base64,{encoded_string}" style="max-width: 300px; width: 100%; border-radius: 8px;">'
 
-st.markdown(f'<div style="display: flex; align-items: center; margin-bottom: 20px;"><h1 style="margin: 0;">📄 OFFERTE & ORDINI</h1>{logo_html}</div>', unsafe_allow_html=True)
+st.markdown(f'<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px;"><h1 style="margin: 0; min-width: 250px;">📄 OFFERTE & ORDINI</h1>{logo_html}</div>', unsafe_allow_html=True)
 
 # GESTIONE MESSAGGI DI NOTIFICA
 if 'msg_successo' in st.session_state: st.success(st.session_state.pop('msg_successo'))
