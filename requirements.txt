@@ -4,4 +4,3 @@ requests
 fpdf2
 openpyxl
 pillow
-google-generativeai
