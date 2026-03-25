@@ -507,4 +507,188 @@ if st.session_state['carrello']:
                     label_prezzo = "Prezzo Netto:"
                             
                     if art not in raggruppo:
-                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto
+                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto": r["Netto U."], "Normativa": r.get("Normativa", ""), "Label": label_prezzo}
+                    
+                    if r["Quantità"] > 0:
+                        if r["Taglia"] == "-": raggruppo[art]["T"].append(f"Q.tà: {r['Quantità']}pz")
+                        else: raggruppo[art]["T"].append(f"Tg{r['Taglia']}: {r['Quantità']}pz")
+                    
+                    if isinstance(r["Totale Riga"], (int, float)):
+                        raggruppo[art]["Tot"] += r["Totale Riga"]
+                    raggruppo[art]["Tot"] = arrotonda(raggruppo[art]["Tot"])
+
+                class PDF(FPDF):
+                    def header(self):
+                        for f in ["logo.png", "logo.jpg", "logo.jpeg"]:
+                            if os.path.exists(f):
+                                try:
+                                    with Image.open(f) as img:
+                                        if img.mode == 'RGBA':
+                                            background = Image.new('RGB', img.size, (255, 255, 255))
+                                            background.paste(img, mask=img.split()[3]) 
+                                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_logo:
+                                                background.save(tmp_logo.name, 'JPEG')
+                                                logo_path = tmp_logo.name
+                                            self.image(logo_path, 5, 4, 70) 
+                                            os.remove(logo_path)
+                                        else:
+                                            self.image(f, 5, 4, 70) 
+                                except Exception:
+                                    self.image(f, 5, 4, 70)
+                                break
+                                
+                        if self.page_no() == 1:
+                            self.set_font("helvetica", "", 12)
+                            self.set_xy(100, 15)
+                            self.cell(100, 6, "Spett.le", align="R", ln=1)
+                            self.set_font("helvetica", "B", 20) 
+                            self.cell(0, 8, nome_cliente if nome_cliente else "Cliente", align="R", ln=1)
+                            if nome_referente:
+                                self.set_font("helvetica", "", 15) 
+                                self.cell(0, 7, f"c.a. {nome_referente}", align="R", ln=1)
+                            fuso_italia = pytz.timezone('Europe/Rome')
+                            data_formattata = datetime.now(fuso_italia).strftime("%d.%m.%Y")
+                            self.set_font("helvetica", "I", 11)
+                            self.cell(0, 7, f"Data: {data_formattata}", align="R", ln=1)
+                        
+                        self.set_y(60)
+
+                pdf = PDF()
+                pdf.add_page()
+                
+                for art, dati in raggruppo.items():
+                    y_inizio = pdf.get_y()
+                    if y_inizio > 230:
+                        pdf.add_page()
+                        y_inizio = pdf.get_y()
+
+                    pdf.set_xy(10, y_inizio)
+                    pdf.set_font("helvetica", "B", 12)
+                    pdf.cell(110, 7, f"Modello: {art}", ln=1) 
+                    if dati.get("Normativa"):
+                        pdf.set_font("helvetica", "I", 9) 
+                        pdf.cell(110, 5, f"Normativa: {dati['Normativa']}", ln=1) 
+                    
+                    pdf.set_font("helvetica", "", 10)
+                    pdf.cell(110, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1) 
+                    
+                    pdf.set_font("helvetica", "I", 9)
+                    if dati["T"]:
+                        pdf.multi_cell(110, 5, " | ".join(dati["T"])) 
+                    else:
+                        pdf.cell(110, 5, "Proposta Modello", ln=1) 
+                    
+                    if dati['Tot'] > 0:
+                        pdf.set_x(10)
+                        pdf.set_font("helvetica", "B", 10)
+                        pdf.cell(110, 6, f"Subtotale: {dati['Tot']:.2f} Euro", ln=1, align="L") 
+                    
+                    y_fine_testo = pdf.get_y()
+                    y_fine_immagine = y_inizio + 10
+                    
+                    if dati["Img"] and dati["Img"].startswith("http"):
+                        try:
+                            res = requests.get(dati["Img"], headers=miei_headers, timeout=5)
+                            if res.status_code == 200:
+                                est = ".png" if ".png" in dati["Img"].lower() else ".jpg"
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=est) as tmp:
+                                    tmp.write(res.content)
+                                    tmp_name = tmp.name
+                                
+                                with Image.open(tmp_name) as img:
+                                    w_px, h_px = img.size
+                                    aspect_ratio = w_px / h_px
+                                    max_w, max_h = 60.0, 52.5 
+                                    
+                                    if aspect_ratio > (max_w / max_h):
+                                        final_w = max_w
+                                        final_h = max_w / aspect_ratio
+                                    else:
+                                        final_h = max_h
+                                        final_w = max_h * aspect_ratio
+                                
+                                    x_pos = 135 + (max_w - final_w) / 2
+                                    y_pos = y_inizio + 2
+                                    pdf.image(tmp_name, x=x_pos, y=y_pos, w=final_w, h=final_h)
+                                    y_fine_immagine = y_pos + final_h + 2
+                        except: pass
+                    
+                    pdf.set_y(max(y_fine_testo, y_fine_immagine) + 2)
+                    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+                    pdf.ln(5)
+                
+                if totale_paia_carrello > 0:
+                    pdf.ln(5)
+                    pdf.set_font("helvetica", "B", 14)
+                    pdf.cell(0, 10, f"TOTALE GENERALE: {totale_generale:.2f} Euro", ln=1, align="R")
+                    pdf.set_font("helvetica", "I", 12)
+                    pdf.cell(0, 6, f"(Totale Paia Complessive: {totale_paia_carrello})", ln=1, align="R")
+
+                pdf.ln(5)
+                pdf.set_font("helvetica", "B", 10)
+                pdf.cell(0, 6, "Condizioni Commerciali:", ln=1)
+                pdf.set_font("helvetica", "", 10)
+                pdf.cell(0, 6, f"Pagamento: {campo_pagamento}", ln=1)
+                pdf.cell(0, 6, f"Trasporto: {campo_trasporto}", ln=1)
+                pdf.cell(0, 6, f"Validità Offerta: {campo_validita}", ln=1)
+                
+                if note_preventivo:
+                    pdf.ln(5)
+                    pdf.set_font("helvetica", "B", 12)
+                    pdf.cell(0, 6, "Note Aggiuntive:", ln=1)
+                    pdf.set_font("helvetica", "", 11)
+                    pdf.multi_cell(0, 6, note_preventivo)
+
+                # --- FIRMA FISSA ---
+                pdf.ln(15)
+                y_corrente = pdf.get_y()
+                if y_corrente > 265:
+                    pdf.add_page()
+                pdf.set_font("helvetica", "B", 11)
+                pdf.cell(0, 5, "CIEFFE snc", ln=1, align="R")
+
+                pdf.set_auto_page_break(auto=False)
+                pdf.set_y(-20) 
+                pdf.set_font("helvetica", "I", 7)
+                pdf.set_text_color(128, 128, 128)
+                disclaimer = "Il presente documento ha valore di proposta commerciale e non costituisce conferma d'ordine vincolante. Le condizioni, le quantità e i prezzi ivi riportati sono da intendersi validi salvo approvazione finale da parte della Direzione."
+                pdf.multi_cell(0, 3, disclaimer, align="C")
+                pdf.set_text_color(0, 0, 0)
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                    pdf.output(tmp_pdf.name)
+                    preventivo_path = tmp_pdf.name
+
+                with open(preventivo_path, "rb") as f:
+                    pdf_bytes = f.read()
+
+                try: os.remove(preventivo_path)
+                except: pass
+
+                nome_sicuro = nome_cliente if nome_cliente else "Cliente"
+                fuso_italia = pytz.timezone('Europe/Rome')
+                data_odierna = datetime.now(fuso_italia).strftime("%d.%m.%Y")
+                st.session_state['pdf_pronto'] = pdf_bytes
+                st.session_state['nome_file_pronto'] = f"{nome_sicuro}_{data_odierna}.pdf"
+
+    if 'pdf_pronto' in st.session_state:
+        st.divider()
+        st.success("✅ PDF Generato! Clicca il pulsante qui sotto per completare tutte le operazioni.")
+        
+        sconti_base = (sc1, sc2, sc3)
+        sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
+        
+        st.download_button(
+            label="⬇️ Scarica PDF e Salva in Archivio 💾",
+            data=st.session_state['pdf_pronto'],
+            file_name=st.session_state['nome_file_pronto'],
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary",
+            on_click=esegui_azioni_finali,
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg)
+        )
+        
+        if 'esito_cloud' in st.session_state:
+            if st.session_state['esito_cloud'][0]: st.success(st.session_state['esito_cloud'][1])
+            else: st.error(st.session_state['esito_cloud'][1])
