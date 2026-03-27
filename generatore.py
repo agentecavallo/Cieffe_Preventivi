@@ -774,18 +774,25 @@ if st.session_state['carrello']:
                     
                     y_fine_testo = pdf.get_y()
                     
-                    # --- IMMAGINE ---
+                    # --- IMMAGINE AD ALTA QUALITA' ---
                     y_fine_immagine = y_inizio
                     if dati["Img"] and dati["Img"].startswith("http"):
                         try:
                             res = requests.get(dati["Img"], headers=miei_headers, timeout=5)
                             if res.status_code == 200:
-                                est = ".png" if ".png" in dati["Img"].lower() else ".jpg"
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=est) as tmp:
-                                    tmp.write(res.content)
-                                    tmp_name = tmp.name
-                                
-                                with Image.open(tmp_name) as img:
+                                # Usiamo PIL per elaborare l'immagine al massimo della risoluzione
+                                with Image.open(BytesIO(res.content)) as img:
+                                    # Se l'immagine ha uno sfondo trasparente (es. PNG), la convertiamo in RGB su sfondo bianco
+                                    if img.mode in ('RGBA', 'LA', 'P'):
+                                        background = Image.new('RGB', img.size, (255, 255, 255))
+                                        if img.mode == 'RGBA':
+                                            background.paste(img, mask=img.split()[3])
+                                        else:
+                                            background.paste(img)
+                                        img = background
+                                    elif img.mode != 'RGB':
+                                        img = img.convert('RGB')
+                                    
                                     w_px, h_px = img.size
                                     aspect_ratio = w_px / h_px
                                     
@@ -801,6 +808,11 @@ if st.session_state['carrello']:
                                     x_pos = 140 + (max_box - final_w) / 2
                                     y_pos = y_inizio + (max_box - final_h) / 2
                                     
+                                    # Salviamo un file JPG temporaneo imponendo la QUALITA' 100
+                                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                                        img.save(tmp, format='JPEG', quality=100, subsampling=0)
+                                        tmp_name = tmp.name
+                                        
                                     pdf.image(tmp_name, x=x_pos, y=y_pos, w=final_w, h=final_h)
                                     y_fine_immagine = y_inizio + max_box
                         except: pass
