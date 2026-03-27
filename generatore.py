@@ -646,32 +646,42 @@ if st.session_state['carrello']:
                         pdf.add_page()
                         y_inizio = pdf.get_y()
 
+                    # --- TITOLO ---
                     pdf.set_xy(10, y_inizio)
                     pdf.set_font("helvetica", "B", 12)
-                    pdf.cell(110, 7, f"Modello: {art}", ln=1) 
+                    pdf.multi_cell(120, 6, f"Modello: {art}")
                     
+                    # --- NORMATIVA / DESCRIZIONE ---
                     if dati.get("Normativa"):
+                        pdf.set_x(10) # FONDAMENTALE: Riporta a capo dopo una multi_cell precedente
                         pdf.set_font("helvetica", "I", 9)
-                        # MODIFICA QUI: Uso multi_cell per mandare a capo il testo automaticamente
-                        pdf.multi_cell(110, 5, dati['Normativa']) 
+                        pdf.multi_cell(120, 5, dati['Normativa']) 
                     
-                    pdf.set_font("helvetica", "", 10)
-                    pdf.cell(110, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1) 
+                    # --- PREZZO (Grande e in Neretto) ---
+                    pdf.ln(2) # Piccolo spazietto per dare respiro
+                    pdf.set_x(10) # Assicura che sia rigorosamente a sinistra
+                    pdf.set_font("helvetica", "B", 13)
+                    pdf.cell(120, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1, align="L") 
                     
+                    # --- TAGLIE ---
+                    pdf.ln(1)
+                    pdf.set_x(10)
                     pdf.set_font("helvetica", "I", 9)
                     if dati["T"]:
-                        pdf.multi_cell(110, 5, " | ".join(dati["T"])) 
+                        pdf.multi_cell(120, 5, " | ".join(dati["T"])) 
                     else:
-                        pdf.cell(110, 5, "Proposta Modello", ln=1) 
+                        pdf.cell(120, 5, "Proposta Modello", ln=1) 
                     
+                    # --- SUBTOTALE ---
                     if dati['Tot'] > 0:
                         pdf.set_x(10)
                         pdf.set_font("helvetica", "B", 10)
-                        pdf.cell(110, 6, f"Subtotale: {dati['Tot']:.2f} Euro", ln=1, align="L") 
+                        pdf.cell(120, 6, f"Subtotale: {dati['Tot']:.2f} Euro", ln=1, align="L") 
                     
                     y_fine_testo = pdf.get_y()
-                    y_fine_immagine = y_inizio + 10
                     
+                    # --- IMMAGINE (Box standard a destra) ---
+                    y_fine_immagine = y_inizio
                     if dati["Img"] and dati["Img"].startswith("http"):
                         try:
                             res = requests.get(dati["Img"], headers=miei_headers, timeout=5)
@@ -684,22 +694,28 @@ if st.session_state['carrello']:
                                 with Image.open(tmp_name) as img:
                                     w_px, h_px = img.size
                                     aspect_ratio = w_px / h_px
-                                    max_w, max_h = 60.0, 52.5 
                                     
-                                    if aspect_ratio > (max_w / max_h):
-                                        final_w = max_w
-                                        final_h = max_w / aspect_ratio
-                                    else:
-                                        final_h = max_h
-                                        final_w = max_h * aspect_ratio
+                                    # BOX FISSO 55x55 millimetri
+                                    max_box = 55.0 
+                                    
+                                    if aspect_ratio > 1: # Se è più larga (es. scarpe)
+                                        final_w = max_box
+                                        final_h = max_box / aspect_ratio
+                                    else: # Se è più alta (es. polo, giacche)
+                                        final_h = max_box
+                                        final_w = max_box * aspect_ratio
                                 
-                                    x_pos = 135 + (max_w - final_w) / 2
-                                    y_pos = y_inizio + 2
+                                    # Calcolo per centrare perfettamente l'immagine dentro al box 55x55
+                                    x_pos = 140 + (max_box - final_w) / 2
+                                    y_pos = y_inizio + (max_box - final_h) / 2
+                                    
                                     pdf.image(tmp_name, x=x_pos, y=y_pos, w=final_w, h=final_h)
-                                    y_fine_immagine = y_pos + final_h + 2
+                                    y_fine_immagine = y_inizio + max_box
                         except: pass
                     
-                    pdf.set_y(max(y_fine_testo, y_fine_immagine) + 2)
+                    # --- LINEA SEPARATRICE ---
+                    # Traccia la riga prendendo il punto più basso tra testo e immagine
+                    pdf.set_y(max(y_fine_testo, y_fine_immagine) + 5)
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                     pdf.ln(5)
                 
