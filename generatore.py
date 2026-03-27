@@ -6,6 +6,8 @@ import os
 import tempfile
 import json
 import pytz
+import re
+from urllib.parse import urljoin
 from fpdf import FPDF
 from datetime import datetime
 from io import BytesIO
@@ -23,7 +25,53 @@ def arrotonda(valore):
     return float(Decimal(str(valore)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 # =========================================================
-# --- GESTIONE ARCHIVIO LOCALE (SENZA API KEY) ---
+# --- ESTRATTORE MAGICO IMMAGINI SITI WEB ---
+# =========================================================
+miei_headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+}
+
+@st.cache_data
+def estrai_immagine_da_web(url):
+    """
+    Se il link è una pagina web (come per Actionwear), va a cercare 
+    il link reale dell'immagine all'interno del codice del sito!
+    """
+    url = str(url).strip()
+    if not url or not url.startswith('http'):
+        return url
+        
+    # Se è già un'immagine diretta (jpg, png, ecc.), non fa nulla
+    if any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']):
+        return url
+        
+    try:
+        res = requests.get(url, headers=miei_headers, timeout=5)
+        if res.status_code == 200:
+            html = res.text
+            
+            # Cerca il tag standard delle immagini (Open Graph) usato dagli e-commerce
+            match = re.search(r'property="og:image"\s+content="([^"]+)"', html, re.IGNORECASE)
+            if not match:
+                match = re.search(r'content="([^"]+)"\s+property="og:image"', html, re.IGNORECASE)
+                
+            if match:
+                img_src = match.group(1)
+                return urljoin(url, img_src)
+                
+            # Fallback di sicurezza: prima immagine ragionevolmente valida non di logo
+            immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
+            for img in immagini:
+                if "logo" not in img.lower() and (".jpg" in img.lower() or ".png" in img.lower() or ".webp" in img.lower()):
+                    return urljoin(url, img)
+    except:
+        pass
+        
+    return url
+
+# =========================================================
+# --- GESTIONE ARCHIVIO LOCALE ---
 # =========================================================
 FILE_STORICO = "storico_preventivi.json"
 
@@ -41,7 +89,6 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_bas
     if not carrello: return False, "⚠️ Il carrello è vuoto."
 
     storico = carica_storico()
-    # Imposto il fuso orario italiano
     fuso_italia = pytz.timezone('Europe/Rome')
     ora_attuale = datetime.now(fuso_italia)
     
@@ -52,7 +99,6 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_bas
             date_str = key.replace(f"{cliente} - ", "")
             try:
                 dt_obj = datetime.strptime(date_str, "%d.%m.%Y %H:%M")
-                # Faccio il check sui secondi ignorando il fuso per semplicità
                 if (ora_attuale.replace(tzinfo=None) - dt_obj).total_seconds() <= 3600:
                     id_univoco = key
                     break
@@ -154,7 +200,6 @@ def carica_dati(path, tipo="base"):
                 for _ in range(11 - num_cols):
                     data[f"Extra_{_}"] = ""
             data = data.iloc[:, :11]
-            # Mappiamo le colonne: A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9 (IMMAGINE), K=10 (LISTINO)
             data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'IMMAGINE', 'LISTINO']
             
             for col in ['B', 'C', 'D', 'E', 'I']:
@@ -167,7 +212,14 @@ def carica_dati(path, tipo="base"):
                 return " - ".join([p.strip() for p in parts if p.strip() and str(p).lower() != 'nan'])
             data['ARTICOLO'] = data.apply(build_art_aw, axis=1)
             
-            data['NORMATIVA'] = "Articolo: " + data['C'] + " | Pagina Catalogo: " + data['B'] + " | Minimo acquistabile: " + data['I']
+            # Formattazione per mandare a capo i testi ed eliminare il .0 dalle pagine!
+            def pulisci_norm_aw(row):
+                pag = str(row['B']).strip()
+                if pag.endswith('.0'): 
+                    pag = pag[:-2]
+                return f"Articolo: {row['C']}\nPagina Catalogo: {pag}\nMinimo acquistabile: {row['I']}"
+                
+            data['NORMATIVA'] = data.apply(pulisci_norm_aw, axis=1)
             
         else:
             nomi_colonne = [str(c).strip().upper() for c in data.columns]
@@ -193,11 +245,6 @@ df_base = carica_dati('Listino_agente.xlsx', "base")
 df_atg = carica_dati('Listino_ATG.xlsx', "atg")
 df_payper = carica_dati('listino_payper.xlsx', "payper")
 df_actionwear = carica_dati('listino_actionwear.xlsx', "actionwear")
-
-miei_headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-}
 
 # =========================================================
 # --- CALLBACKS ---
@@ -356,7 +403,7 @@ sc_pay2 = col_pay2.number_input("Sc. Pay 2 %", 0.0, 100.0, 0.0, key="sc_payper2"
 sc_pay3 = col_pay3.number_input("Sc. Pay 3 %", 0.0, 100.0, 0.0, key="sc_payper3", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
-st.sidebar.header("👕 Sconto Actionwear")
+st.sidebar.header("🧢 Sconto Actionwear")
 col_aw1, col_aw2, col_aw3 = st.sidebar.columns(3)
 sc_aw1 = col_aw1.number_input("Sc. AW 1 %", 0.0, 100.0, 0.0, key="sc_aw1", on_change=aggiorna_prezzi_automaticamente)
 sc_aw2 = col_aw2.number_input("Sc. AW 2 %", 0.0, 100.0, 0.0, key="sc_aw2", on_change=aggiorna_prezzi_automaticamente)
@@ -472,7 +519,12 @@ else:
             
             catalogo_selezionato = d['CATALOGO_PROVENIENZA']
             
-            # Gestione dinamica Normativa / Dati aggiuntivi in base al listino
+            # --- MAGIA ESTRAZIONE IMMAGINE ---
+            img_url_originale = str(d.get('IMMAGINE', '')).strip()
+            # Questa riga trasforma la url del sito action-wear nell'immagine vera e propria
+            img_url_reale = estrai_immagine_da_web(img_url_originale)
+            
+            # Gestione dinamica Normativa
             normativa_articolo = ""
             if catalogo_selezionato in ["Listino Base", "Listino Payper", "Listino Actionwear"]:
                 normativa_articolo = str(d.get('NORMATIVA', '')).strip()
@@ -509,7 +561,7 @@ else:
                 
                 if normativa_articolo:
                     if catalogo_selezionato in ["Listino Payper", "Listino Actionwear"]:
-                        st.markdown(f"👕 **Info:** {normativa_articolo}")
+                        st.markdown(f"**Info:**\n{normativa_articolo}")
                     else:
                         st.markdown(f"🛡️ **Normativa:** {normativa_articolo}")
                 
@@ -529,7 +581,6 @@ else:
                 modalita = st.radio("Scegli la modalità:", opzioni_mod, index=idx_mod, horizontal=True)
                 
                 if modalita == "Specifica Taglie":
-                    # Adatto il rendering del form in base alle taglie
                     for row_start in range(0, len(taglie_disponibili), 8):
                         chunk = taglie_disponibili[row_start:row_start + 8]
                         cols = st.columns(8)
@@ -543,13 +594,12 @@ else:
                     if totale_paia_modello_corrente > 0:
                         st.info(f"🔢 Quantità da aggiungere per **{d['ARTICOLO']}**: **{totale_paia_modello_corrente}**")
 
-                    img_url = str(d.get('IMMAGINE', '')).strip()
                     st.button(
                         "🛒 Aggiungi al Preventivo", 
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_taglie, 
-                        args=(d['ARTICOLO'], img_url, normativa_articolo, prezzo_netto_finale, taglie_disponibili, catalogo_selezionato)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, taglie_disponibili, catalogo_selezionato)
                     )
                 else:
                     st.number_input("Quantità totale:", min_value=0, step=1, key='qta_generica_input')
@@ -560,19 +610,17 @@ else:
                     else:
                         st.info(f"🔢 Quantità da aggiungere per **{d['ARTICOLO']}**: **{q}**")
                         
-                    img_url = str(d.get('IMMAGINE', '')).strip()
                     st.button(
                         "🛒 Aggiungi Modello", 
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_generico,
-                        args=(d['ARTICOLO'], img_url, normativa_articolo, prezzo_netto_finale)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale)
                     )
             with c2:
-                url = str(d.get('IMMAGINE', '')).strip()
-                if url.startswith('http'):
+                if img_url_reale.startswith('http'):
                     try:
-                        r = requests.get(url, headers=miei_headers, timeout=5)
+                        r = requests.get(img_url_reale, headers=miei_headers, timeout=5)
                         if r.status_code == 200: st.image(BytesIO(r.content), use_container_width=True)
                     except: pass
 
