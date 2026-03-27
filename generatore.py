@@ -36,7 +36,7 @@ def carica_storico():
     except Exception:
         return {}
 
-def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper):
+def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear):
     if not cliente: return False, "⚠️ Inserisci almeno il Nome Cliente."
     if not carrello: return False, "⚠️ Il carrello è vuoto."
 
@@ -77,6 +77,7 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_bas
         "sconti_base": sc_base,
         "sconti_atg": sc_atg,
         "sconti_payper": sc_payper,
+        "sconti_actionwear": sc_actionwear,
         "carrello": carrello
     }
 
@@ -126,13 +127,13 @@ def carica_dati(path, tipo="base"):
         if tipo == "atg":
             data = data.iloc[:, :6]
             data.columns = ['ARTICOLO', 'RIVESTIMENTO', 'QTA_BOX', 'RANGE_TAGLIE', 'LISTINO', 'IMMAGINE']
+        
         elif tipo == "payper":
             num_cols = len(data.columns)
             if num_cols < 13:
                 for _ in range(13 - num_cols):
                     data[f"Extra_{_}"] = ""
             data = data.iloc[:, :13]
-            # Mappiamo le colonne con le lettere per comodità di gestione
             data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'LISTINO', 'IMMAGINE']
             
             for col in ['B', 'C', 'E', 'F', 'I']:
@@ -147,13 +148,33 @@ def carica_dati(path, tipo="base"):
             
             data['NORMATIVA'] = "Articolo: " + data['C'] + " | Descrizione: " + data['I']
             
+        elif tipo == "actionwear":
+            num_cols = len(data.columns)
+            if num_cols < 11:
+                for _ in range(11 - num_cols):
+                    data[f"Extra_{_}"] = ""
+            data = data.iloc[:, :11]
+            # Mappiamo le colonne: A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9 (IMMAGINE), K=10 (LISTINO)
+            data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'IMMAGINE', 'LISTINO']
+            
+            for col in ['B', 'C', 'D', 'E', 'I']:
+                data[col] = data[col].fillna("").astype(str)
+            
+            data['SEARCH_COL'] = data['C'] + " " + data['D'] + " " + data['I']
+            
+            def build_art_aw(row):
+                parts = [row['C'], row['D'], row['E']]
+                return " - ".join([p.strip() for p in parts if p.strip() and str(p).lower() != 'nan'])
+            data['ARTICOLO'] = data.apply(build_art_aw, axis=1)
+            
+            data['NORMATIVA'] = "Articolo: " + data['C'] + " | Pagina Catalogo: " + data['B'] + " | Minimo acquistabile: " + data['I']
+            
         else:
             nomi_colonne = [str(c).strip().upper() for c in data.columns]
             if len(nomi_colonne) > 5: nomi_colonne[5] = 'NORMATIVA' 
             data.columns = nomi_colonne
             
         # --- FIX PREZZI ---
-        # Puliamo la colonna LISTINO trasformando eventuali virgole in punti
         if 'LISTINO' in data.columns:
             def clean_price(val):
                 if pd.isna(val): return 0.0
@@ -171,6 +192,7 @@ def carica_dati(path, tipo="base"):
 df_base = carica_dati('Listino_agente.xlsx', "base")
 df_atg = carica_dati('Listino_ATG.xlsx', "atg")
 df_payper = carica_dati('listino_payper.xlsx', "payper")
+df_actionwear = carica_dati('listino_actionwear.xlsx', "actionwear")
 
 miei_headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
@@ -192,6 +214,9 @@ def aggiorna_prezzi_automaticamente():
     sc_p1 = st.session_state.get('sc_payper1', 0.0)
     sc_p2 = st.session_state.get('sc_payper2', 0.0)
     sc_p3 = st.session_state.get('sc_payper3', 0.0)
+    sc_aw1 = st.session_state.get('sc_aw1', 0.0)
+    sc_aw2 = st.session_state.get('sc_aw2', 0.0)
+    sc_aw3 = st.session_state.get('sc_aw3', 0.0)
     
     aggiornati = False
     for riga in st.session_state['carrello']:
@@ -211,6 +236,9 @@ def aggiorna_prezzi_automaticamente():
         elif df_payper is not None and art in df_payper['ARTICOLO'].values:
             listino = float(df_payper[df_payper['ARTICOLO'] == art].iloc[0]['LISTINO'])
             catalogo = "Listino Payper"
+        elif df_actionwear is not None and art in df_actionwear['ARTICOLO'].values:
+            listino = float(df_actionwear[df_actionwear['ARTICOLO'] == art].iloc[0]['LISTINO'])
+            catalogo = "Listino Actionwear"
         
         if catalogo == "Listino Base":
             molt = (1 - sc_b1/100) * (1 - sc_b2/100) * (1 - sc_b3/100)
@@ -218,6 +246,8 @@ def aggiorna_prezzi_automaticamente():
             molt = (1 - sc_a1/100) * (1 - sc_a2/100) * (1 - sc_a3/100)
         elif catalogo == "Listino Payper":
             molt = (1 - sc_p1/100) * (1 - sc_p2/100) * (1 - sc_p3/100)
+        elif catalogo == "Listino Actionwear":
+            molt = (1 - sc_aw1/100) * (1 - sc_aw2/100) * (1 - sc_aw3/100)
         else:
             continue
             
@@ -229,12 +259,12 @@ def aggiorna_prezzi_automaticamente():
     if aggiornati:
         st.session_state['msg_successo'] = "🔄 Prezzi ricalcolati in base ai nuovi sconti!"
 
-def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper):
-    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper)
+def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear):
+    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear)
     st.session_state['esito_cloud'] = (succ_cl, msg_cl)
 
-def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper):
-    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper)
+def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear):
+    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear)
     if succ: st.session_state['msg_successo'] = msg
     else: st.session_state['msg_errore'] = msg
 
@@ -255,6 +285,9 @@ def esegui_caricamento(d):
     st.session_state['sc_payper1'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[0]
     st.session_state['sc_payper2'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[1]
     st.session_state['sc_payper3'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[2]
+    st.session_state['sc_aw1'] = d.get('sconti_actionwear', [0.0, 0.0, 0.0])[0]
+    st.session_state['sc_aw2'] = d.get('sconti_actionwear', [0.0, 0.0, 0.0])[1]
+    st.session_state['sc_aw3'] = d.get('sconti_actionwear', [0.0, 0.0, 0.0])[2]
 
 def callback_aggiungi_taglie(articolo, img, normativa, prezzo, taglie, catalogo):
     aggiunti = False
@@ -321,6 +354,13 @@ col_pay1, col_pay2, col_pay3 = st.sidebar.columns(3)
 sc_pay1 = col_pay1.number_input("Sc. Pay 1 %", 0.0, 100.0, 0.0, key="sc_payper1", on_change=aggiorna_prezzi_automaticamente)
 sc_pay2 = col_pay2.number_input("Sc. Pay 2 %", 0.0, 100.0, 0.0, key="sc_payper2", on_change=aggiorna_prezzi_automaticamente)
 sc_pay3 = col_pay3.number_input("Sc. Pay 3 %", 0.0, 100.0, 0.0, key="sc_payper3", on_change=aggiorna_prezzi_automaticamente)
+
+st.sidebar.divider()
+st.sidebar.header("👕 Sconto Actionwear")
+col_aw1, col_aw2, col_aw3 = st.sidebar.columns(3)
+sc_aw1 = col_aw1.number_input("Sc. AW 1 %", 0.0, 100.0, 0.0, key="sc_aw1", on_change=aggiorna_prezzi_automaticamente)
+sc_aw2 = col_aw2.number_input("Sc. AW 2 %", 0.0, 100.0, 0.0, key="sc_aw2", on_change=aggiorna_prezzi_automaticamente)
+sc_aw3 = col_aw3.number_input("Sc. AW 3 %", 0.0, 100.0, 0.0, key="sc_aw3", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
 st.sidebar.header("⚖️ Condizioni Commerciali")
@@ -396,7 +436,7 @@ if 'msg_successo' in st.session_state: st.success(st.session_state.pop('msg_succ
 if 'msg_errore' in st.session_state: st.error(st.session_state.pop('msg_errore'))
 if 'msg_warning' in st.session_state: st.warning(st.session_state.pop('msg_warning'))
 
-if df_base is None and df_atg is None and df_payper is None:
+if df_base is None and df_atg is None and df_payper is None and df_actionwear is None:
     st.warning("⚠️ Nessun file Excel trovato.")
 else:
     # --- SEZIONE: RICERCA MANUALE ---
@@ -415,11 +455,15 @@ else:
                 r_atg['CATALOGO_PROVENIENZA'] = "Listino ATG"
                 risultati_trovati.append(r_atg)
         if df_payper is not None:
-            # Per Payper filtriamo sulla SEARCH_COL (B + C + E + F)
             r_payper = df_payper[df_payper['SEARCH_COL'].astype(str).str.upper().str.contains(ricerca, na=False)].copy()
             if not r_payper.empty:
                 r_payper['CATALOGO_PROVENIENZA'] = "Listino Payper"
                 risultati_trovati.append(r_payper)
+        if df_actionwear is not None:
+            r_aw = df_actionwear[df_actionwear['SEARCH_COL'].astype(str).str.upper().str.contains(ricerca, na=False)].copy()
+            if not r_aw.empty:
+                r_aw['CATALOGO_PROVENIENZA'] = "Listino Actionwear"
+                risultati_trovati.append(r_aw)
         
         if risultati_trovati:
             risultato_completo = pd.concat(risultati_trovati, ignore_index=True)
@@ -430,9 +474,7 @@ else:
             
             # Gestione dinamica Normativa / Dati aggiuntivi in base al listino
             normativa_articolo = ""
-            if catalogo_selezionato == "Listino Base":
-                normativa_articolo = str(d.get('NORMATIVA', '')).strip()
-            elif catalogo_selezionato == "Listino Payper":
+            if catalogo_selezionato in ["Listino Base", "Listino Payper", "Listino Actionwear"]:
                 normativa_articolo = str(d.get('NORMATIVA', '')).strip()
                 
             if normativa_articolo.lower() in ["nan", "none", "", "nat", "null"]: 
@@ -447,6 +489,9 @@ else:
                 taglie_disponibili = [6, 7, 8, 9, 10, 11, 12]
             elif catalogo_selezionato == "Listino Payper":
                 sconto_applicato = (sc_pay1, sc_pay2, sc_pay3)
+                taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
+            elif catalogo_selezionato == "Listino Actionwear":
+                sconto_applicato = (sc_aw1, sc_aw2, sc_aw3)
                 taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
             
             st.divider()
@@ -463,7 +508,7 @@ else:
                 st.markdown(f"🏷️ **Prezzo di Listino:** {prezzo_listino:.2f} €")
                 
                 if normativa_articolo:
-                    if catalogo_selezionato == "Listino Payper":
+                    if catalogo_selezionato in ["Listino Payper", "Listino Actionwear"]:
                         st.markdown(f"👕 **Info:** {normativa_articolo}")
                     else:
                         st.markdown(f"🛡️ **Normativa:** {normativa_articolo}")
@@ -484,7 +529,7 @@ else:
                 modalita = st.radio("Scegli la modalità:", opzioni_mod, index=idx_mod, horizontal=True)
                 
                 if modalita == "Specifica Taglie":
-                    # Adatto il rendering del form in base alle taglie (che per Payper sono stringhe)
+                    # Adatto il rendering del form in base alle taglie
                     for row_start in range(0, len(taglie_disponibili), 8):
                         chunk = taglie_disponibili[row_start:row_start + 8]
                         cols = st.columns(8)
@@ -573,11 +618,12 @@ if st.session_state['carrello']:
         sconti_base = (sc1, sc2, sc3)
         sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
         sconti_payper = (sc_pay1, sc_pay2, sc_pay3)
+        sconti_actionwear = (sc_aw1, sc_aw2, sc_aw3)
         st.button(
             "💾 Salva Preventivo", 
             use_container_width=True, 
             on_click=callback_salva_solo,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper, sconti_actionwear)
         )
             
     with c_p4:
@@ -653,13 +699,13 @@ if st.session_state['carrello']:
                     
                     # --- NORMATIVA / DESCRIZIONE ---
                     if dati.get("Normativa"):
-                        pdf.set_x(10) # FONDAMENTALE: Riporta a capo dopo una multi_cell precedente
+                        pdf.set_x(10)
                         pdf.set_font("helvetica", "I", 9)
                         pdf.multi_cell(120, 5, dati['Normativa']) 
                     
-                    # --- PREZZO (Grande e in Neretto) ---
-                    pdf.ln(2) # Piccolo spazietto per dare respiro
-                    pdf.set_x(10) # Assicura che sia rigorosamente a sinistra
+                    # --- PREZZO ---
+                    pdf.ln(2) 
+                    pdf.set_x(10) 
                     pdf.set_font("helvetica", "B", 13)
                     pdf.cell(120, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1, align="L") 
                     
@@ -680,7 +726,7 @@ if st.session_state['carrello']:
                     
                     y_fine_testo = pdf.get_y()
                     
-                    # --- IMMAGINE (Box standard a destra) ---
+                    # --- IMMAGINE ---
                     y_fine_immagine = y_inizio
                     if dati["Img"] and dati["Img"].startswith("http"):
                         try:
@@ -695,17 +741,15 @@ if st.session_state['carrello']:
                                     w_px, h_px = img.size
                                     aspect_ratio = w_px / h_px
                                     
-                                    # BOX FISSO 55x55 millimetri
                                     max_box = 55.0 
                                     
-                                    if aspect_ratio > 1: # Se è più larga (es. scarpe)
+                                    if aspect_ratio > 1: 
                                         final_w = max_box
                                         final_h = max_box / aspect_ratio
-                                    else: # Se è più alta (es. polo, giacche)
+                                    else: 
                                         final_h = max_box
                                         final_w = max_box * aspect_ratio
                                 
-                                    # Calcolo per centrare perfettamente l'immagine dentro al box 55x55
                                     x_pos = 140 + (max_box - final_w) / 2
                                     y_pos = y_inizio + (max_box - final_h) / 2
                                     
@@ -714,7 +758,6 @@ if st.session_state['carrello']:
                         except: pass
                     
                     # --- LINEA SEPARATRICE ---
-                    # Traccia la riga prendendo il punto più basso tra testo e immagine
                     pdf.set_y(max(y_fine_testo, y_fine_immagine) + 5)
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                     pdf.ln(5)
@@ -780,6 +823,7 @@ if st.session_state['carrello']:
         sconti_base = (sc1, sc2, sc3)
         sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
         sconti_payper = (sc_pay1, sc_pay2, sc_pay3)
+        sconti_actionwear = (sc_aw1, sc_aw2, sc_aw3)
         
         st.download_button(
             label="⬇️ Scarica PDF e Salva in Archivio 💾",
@@ -789,7 +833,7 @@ if st.session_state['carrello']:
             use_container_width=True,
             type="primary",
             on_click=esegui_azioni_finali,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper, sconti_actionwear)
         )
         
         if 'esito_cloud' in st.session_state:
