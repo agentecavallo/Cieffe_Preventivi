@@ -127,35 +127,43 @@ def carica_dati(path, tipo="base"):
             data = data.iloc[:, :6]
             data.columns = ['ARTICOLO', 'RIVESTIMENTO', 'QTA_BOX', 'RANGE_TAGLIE', 'LISTINO', 'IMMAGINE']
         elif tipo == "payper":
-            # Assicuriamoci che ci siano almeno 13 colonne (fino alla M)
             num_cols = len(data.columns)
             if num_cols < 13:
                 for _ in range(13 - num_cols):
                     data[f"Extra_{_}"] = ""
             data = data.iloc[:, :13]
-            # Mappiamo le colonne con le lettere per comodità di gestione (0=A, 1=B, ..., 11=L, 12=M)
+            # Mappiamo le colonne con le lettere per comodità di gestione
             data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'LISTINO', 'IMMAGINE']
             
-            # Puliamo i NaN per evitare che appaiano nel testo
             for col in ['B', 'C', 'E', 'F', 'I']:
                 data[col] = data[col].fillna("").astype(str)
             
-            # Colonna per la ricerca (B + C + E + F)
             data['SEARCH_COL'] = data['B'] + " " + data['C'] + " " + data['E'] + " " + data['F']
             
-            # Colonna per la visualizzazione unita (Corpo e Titolo PDF)
             def build_art(row):
                 parts = [row['B'], row['C'], row['E'], row['F']]
-                return " - ".join([p.strip() for p in parts if p.strip()])
+                return " - ".join([p.strip() for p in parts if p.strip() and str(p).lower() != 'nan'])
             data['ARTICOLO'] = data.apply(build_art, axis=1)
             
-            # Colonna per rimpiazzare la "Normativa" nel PDF (Articolo C + Descrizione I)
             data['NORMATIVA'] = "Articolo: " + data['C'] + " | Descrizione: " + data['I']
             
         else:
             nomi_colonne = [str(c).strip().upper() for c in data.columns]
             if len(nomi_colonne) > 5: nomi_colonne[5] = 'NORMATIVA' 
             data.columns = nomi_colonne
+            
+        # --- FIX PREZZI ---
+        # Puliamo la colonna LISTINO trasformando eventuali virgole in punti
+        if 'LISTINO' in data.columns:
+            def clean_price(val):
+                if pd.isna(val): return 0.0
+                v_str = str(val).replace('€', '').replace(' ', '').replace(',', '.').strip()
+                try:
+                    return float(v_str)
+                except:
+                    return 0.0
+            data['LISTINO'] = data['LISTINO'].apply(clean_price)
+            
         return data
     except Exception as e:
         return None
@@ -640,13 +648,12 @@ if st.session_state['carrello']:
 
                     pdf.set_xy(10, y_inizio)
                     pdf.set_font("helvetica", "B", 12)
-                    # "art" per Payper contiene già B-C-E-F uniti
                     pdf.cell(110, 7, f"Modello: {art}", ln=1) 
                     
                     if dati.get("Normativa"):
                         pdf.set_font("helvetica", "I", 9)
-                        # Normativa qui contiene "Articolo: [C] | Descrizione: [I]" per Payper
-                        pdf.cell(110, 5, dati['Normativa'], ln=1) 
+                        # MODIFICA QUI: Uso multi_cell per mandare a capo il testo automaticamente
+                        pdf.multi_cell(110, 5, dati['Normativa']) 
                     
                     pdf.set_font("helvetica", "", 10)
                     pdf.cell(110, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1) 
