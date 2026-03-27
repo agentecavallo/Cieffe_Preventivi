@@ -36,7 +36,7 @@ def carica_storico():
     except Exception:
         return {}
 
-def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
+def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper):
     if not cliente: return False, "⚠️ Inserisci almeno il Nome Cliente."
     if not carrello: return False, "⚠️ Il carrello è vuoto."
 
@@ -76,6 +76,7 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_bas
         "validita": val,
         "sconti_base": sc_base,
         "sconti_atg": sc_atg,
+        "sconti_payper": sc_payper,
         "carrello": carrello
     }
 
@@ -125,6 +126,32 @@ def carica_dati(path, tipo="base"):
         if tipo == "atg":
             data = data.iloc[:, :6]
             data.columns = ['ARTICOLO', 'RIVESTIMENTO', 'QTA_BOX', 'RANGE_TAGLIE', 'LISTINO', 'IMMAGINE']
+        elif tipo == "payper":
+            # Assicuriamoci che ci siano almeno 13 colonne (fino alla M)
+            num_cols = len(data.columns)
+            if num_cols < 13:
+                for _ in range(13 - num_cols):
+                    data[f"Extra_{_}"] = ""
+            data = data.iloc[:, :13]
+            # Mappiamo le colonne con le lettere per comodità di gestione (0=A, 1=B, ..., 11=L, 12=M)
+            data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'LISTINO', 'IMMAGINE']
+            
+            # Puliamo i NaN per evitare che appaiano nel testo
+            for col in ['B', 'C', 'E', 'F', 'I']:
+                data[col] = data[col].fillna("").astype(str)
+            
+            # Colonna per la ricerca (B + C + E + F)
+            data['SEARCH_COL'] = data['B'] + " " + data['C'] + " " + data['E'] + " " + data['F']
+            
+            # Colonna per la visualizzazione unita (Corpo e Titolo PDF)
+            def build_art(row):
+                parts = [row['B'], row['C'], row['E'], row['F']]
+                return " - ".join([p.strip() for p in parts if p.strip()])
+            data['ARTICOLO'] = data.apply(build_art, axis=1)
+            
+            # Colonna per rimpiazzare la "Normativa" nel PDF (Articolo C + Descrizione I)
+            data['NORMATIVA'] = "Articolo: " + data['C'] + " | Descrizione: " + data['I']
+            
         else:
             nomi_colonne = [str(c).strip().upper() for c in data.columns]
             if len(nomi_colonne) > 5: nomi_colonne[5] = 'NORMATIVA' 
@@ -135,6 +162,7 @@ def carica_dati(path, tipo="base"):
 
 df_base = carica_dati('Listino_agente.xlsx', "base")
 df_atg = carica_dati('Listino_ATG.xlsx', "atg")
+df_payper = carica_dati('listino_payper.xlsx', "payper")
 
 miei_headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
@@ -153,6 +181,9 @@ def aggiorna_prezzi_automaticamente():
     sc_a1 = st.session_state.get('sc_atg1', 0.0)
     sc_a2 = st.session_state.get('sc_atg2', 0.0)
     sc_a3 = st.session_state.get('sc_atg3', 0.0)
+    sc_p1 = st.session_state.get('sc_payper1', 0.0)
+    sc_p2 = st.session_state.get('sc_payper2', 0.0)
+    sc_p3 = st.session_state.get('sc_payper3', 0.0)
     
     aggiornati = False
     for riga in st.session_state['carrello']:
@@ -169,11 +200,16 @@ def aggiorna_prezzi_automaticamente():
         elif df_atg is not None and art in df_atg['ARTICOLO'].values:
             listino = float(df_atg[df_atg['ARTICOLO'] == art].iloc[0]['LISTINO'])
             catalogo = "Listino ATG"
+        elif df_payper is not None and art in df_payper['ARTICOLO'].values:
+            listino = float(df_payper[df_payper['ARTICOLO'] == art].iloc[0]['LISTINO'])
+            catalogo = "Listino Payper"
         
         if catalogo == "Listino Base":
             molt = (1 - sc_b1/100) * (1 - sc_b2/100) * (1 - sc_b3/100)
         elif catalogo == "Listino ATG":
             molt = (1 - sc_a1/100) * (1 - sc_a2/100) * (1 - sc_a3/100)
+        elif catalogo == "Listino Payper":
+            molt = (1 - sc_p1/100) * (1 - sc_p2/100) * (1 - sc_p3/100)
         else:
             continue
             
@@ -185,12 +221,12 @@ def aggiorna_prezzi_automaticamente():
     if aggiornati:
         st.session_state['msg_successo'] = "🔄 Prezzi ricalcolati in base ai nuovi sconti!"
 
-def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
-    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg)
+def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper):
+    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper)
     st.session_state['esito_cloud'] = (succ_cl, msg_cl)
 
-def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg):
-    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg)
+def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper):
+    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper)
     if succ: st.session_state['msg_successo'] = msg
     else: st.session_state['msg_errore'] = msg
 
@@ -208,6 +244,9 @@ def esegui_caricamento(d):
     st.session_state['sc_atg1'] = d.get('sconti_atg', [0.0, 0.0, 0.0])[0]
     st.session_state['sc_atg2'] = d.get('sconti_atg', [0.0, 0.0, 0.0])[1]
     st.session_state['sc_atg3'] = d.get('sconti_atg', [0.0, 0.0, 0.0])[2]
+    st.session_state['sc_payper1'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[0]
+    st.session_state['sc_payper2'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[1]
+    st.session_state['sc_payper3'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[2]
 
 def callback_aggiungi_taglie(articolo, img, normativa, prezzo, taglie, catalogo):
     aggiunti = False
@@ -267,6 +306,13 @@ col_atg1, col_atg2, col_atg3 = st.sidebar.columns(3)
 sc_atg1 = col_atg1.number_input("Sc. ATG 1 %", 0.0, 100.0, 0.0, key="sc_atg1", on_change=aggiorna_prezzi_automaticamente)
 sc_atg2 = col_atg2.number_input("Sc. ATG 2 %", 0.0, 100.0, 0.0, key="sc_atg2", on_change=aggiorna_prezzi_automaticamente)
 sc_atg3 = col_atg3.number_input("Sc. ATG 3 %", 0.0, 100.0, 0.0, key="sc_atg3", on_change=aggiorna_prezzi_automaticamente)
+
+st.sidebar.divider()
+st.sidebar.header("👕 Sconto Payper")
+col_pay1, col_pay2, col_pay3 = st.sidebar.columns(3)
+sc_pay1 = col_pay1.number_input("Sc. Pay 1 %", 0.0, 100.0, 0.0, key="sc_payper1", on_change=aggiorna_prezzi_automaticamente)
+sc_pay2 = col_pay2.number_input("Sc. Pay 2 %", 0.0, 100.0, 0.0, key="sc_payper2", on_change=aggiorna_prezzi_automaticamente)
+sc_pay3 = col_pay3.number_input("Sc. Pay 3 %", 0.0, 100.0, 0.0, key="sc_payper3", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
 st.sidebar.header("⚖️ Condizioni Commerciali")
@@ -342,7 +388,7 @@ if 'msg_successo' in st.session_state: st.success(st.session_state.pop('msg_succ
 if 'msg_errore' in st.session_state: st.error(st.session_state.pop('msg_errore'))
 if 'msg_warning' in st.session_state: st.warning(st.session_state.pop('msg_warning'))
 
-if df_base is None and df_atg is None:
+if df_base is None and df_atg is None and df_payper is None:
     st.warning("⚠️ Nessun file Excel trovato.")
 else:
     # --- SEZIONE: RICERCA MANUALE ---
@@ -360,6 +406,12 @@ else:
             if not r_atg.empty:
                 r_atg['CATALOGO_PROVENIENZA'] = "Listino ATG"
                 risultati_trovati.append(r_atg)
+        if df_payper is not None:
+            # Per Payper filtriamo sulla SEARCH_COL (B + C + E + F)
+            r_payper = df_payper[df_payper['SEARCH_COL'].astype(str).str.upper().str.contains(ricerca, na=False)].copy()
+            if not r_payper.empty:
+                r_payper['CATALOGO_PROVENIENZA'] = "Listino Payper"
+                risultati_trovati.append(r_payper)
         
         if risultati_trovati:
             risultato_completo = pd.concat(risultati_trovati, ignore_index=True)
@@ -367,11 +419,27 @@ else:
             d = risultato_completo[risultato_completo['ARTICOLO'] == scelta].iloc[0]
             
             catalogo_selezionato = d['CATALOGO_PROVENIENZA']
-            normativa_articolo = str(d.get('NORMATIVA', '')).strip() if catalogo_selezionato == "Listino Base" else ""
-            if normativa_articolo.lower() in ["nan", "none", "", "nat", "null"]: normativa_articolo = ""
             
-            sconto_applicato = (sc1, sc2, sc3) if catalogo_selezionato == "Listino Base" else (sc_atg1, sc_atg2, sc_atg3)
-            taglie_disponibili = list(range(35, 51)) if catalogo_selezionato == "Listino Base" else [6, 7, 8, 9, 10, 11, 12]
+            # Gestione dinamica Normativa / Dati aggiuntivi in base al listino
+            normativa_articolo = ""
+            if catalogo_selezionato == "Listino Base":
+                normativa_articolo = str(d.get('NORMATIVA', '')).strip()
+            elif catalogo_selezionato == "Listino Payper":
+                normativa_articolo = str(d.get('NORMATIVA', '')).strip()
+                
+            if normativa_articolo.lower() in ["nan", "none", "", "nat", "null"]: 
+                normativa_articolo = ""
+            
+            # Applicazione sconti dinamici
+            if catalogo_selezionato == "Listino Base":
+                sconto_applicato = (sc1, sc2, sc3)
+                taglie_disponibili = list(range(35, 51))
+            elif catalogo_selezionato == "Listino ATG":
+                sconto_applicato = (sc_atg1, sc_atg2, sc_atg3)
+                taglie_disponibili = [6, 7, 8, 9, 10, 11, 12]
+            elif catalogo_selezionato == "Listino Payper":
+                sconto_applicato = (sc_pay1, sc_pay2, sc_pay3)
+                taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
             
             st.divider()
             c1, c2 = st.columns([2, 1])
@@ -379,11 +447,18 @@ else:
                 st.subheader(f"Modello: {d['ARTICOLO']}")
                 st.caption(f"📍 Trovato in: **{catalogo_selezionato}**") 
                 
-                prezzo_listino = float(d['LISTINO'])
+                try:
+                    prezzo_listino = float(d['LISTINO'])
+                except:
+                    prezzo_listino = 0.0
+                    
                 st.markdown(f"🏷️ **Prezzo di Listino:** {prezzo_listino:.2f} €")
                 
                 if normativa_articolo:
-                    st.markdown(f"🛡️ **Normativa:** {normativa_articolo}")
+                    if catalogo_selezionato == "Listino Payper":
+                        st.markdown(f"👕 **Info:** {normativa_articolo}")
+                    else:
+                        st.markdown(f"🛡️ **Normativa:** {normativa_articolo}")
                 
                 moltiplicatore = (1 - sconto_applicato[0]/100) * (1 - sconto_applicato[1]/100) * (1 - sconto_applicato[2]/100)
                 prezzo_netto_calcolato = arrotonda(prezzo_listino * moltiplicatore)
@@ -401,6 +476,7 @@ else:
                 modalita = st.radio("Scegli la modalità:", opzioni_mod, index=idx_mod, horizontal=True)
                 
                 if modalita == "Specifica Taglie":
+                    # Adatto il rendering del form in base alle taglie (che per Payper sono stringhe)
                     for row_start in range(0, len(taglie_disponibili), 8):
                         chunk = taglie_disponibili[row_start:row_start + 8]
                         cols = st.columns(8)
@@ -412,7 +488,7 @@ else:
 
                     totale_paia_modello_corrente = sum(st.session_state.get(f"qta_{t}_{catalogo_selezionato}", 0) for t in taglie_disponibili)
                     if totale_paia_modello_corrente > 0:
-                        st.info(f"🔢 Paia da aggiungere per il modello **{d['ARTICOLO']}**: **{totale_paia_modello_corrente}**")
+                        st.info(f"🔢 Quantità da aggiungere per **{d['ARTICOLO']}**: **{totale_paia_modello_corrente}**")
 
                     img_url = str(d.get('IMMAGINE', '')).strip()
                     st.button(
@@ -423,13 +499,13 @@ else:
                         args=(d['ARTICOLO'], img_url, normativa_articolo, prezzo_netto_finale, taglie_disponibili, catalogo_selezionato)
                     )
                 else:
-                    st.number_input("Quantità totale (paia):", min_value=0, step=1, key='qta_generica_input')
+                    st.number_input("Quantità totale:", min_value=0, step=1, key='qta_generica_input')
                     
                     q = st.session_state.get('qta_generica_input', 0)
                     if q == 0:
                         st.info(f"👁️ Verrà aggiunto come **Solo Vetrina/Proposta** (Quantità: 0)")
                     else:
-                        st.info(f"🔢 Paia da aggiungere per il modello **{d['ARTICOLO']}**: **{q}**")
+                        st.info(f"🔢 Quantità da aggiungere per **{d['ARTICOLO']}**: **{q}**")
                         
                     img_url = str(d.get('IMMAGINE', '')).strip()
                     st.button(
@@ -473,7 +549,7 @@ if st.session_state['carrello']:
     
     col_totale1, col_totale2 = st.columns(2)
     with col_totale1: st.markdown(f"### Totale Generale: **{totale_generale:.2f} €**")
-    with col_totale2: st.markdown(f"### Totale Paia: **{totale_paia_carrello}**")
+    with col_totale2: st.markdown(f"### Totale Pezzi: **{totale_paia_carrello}**")
     
     st.divider()
     
@@ -488,11 +564,12 @@ if st.session_state['carrello']:
     with c_p3:
         sconti_base = (sc1, sc2, sc3)
         sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
+        sconti_payper = (sc_pay1, sc_pay2, sc_pay3)
         st.button(
             "💾 Salva Preventivo", 
             use_container_width=True, 
             on_click=callback_salva_solo,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper)
         )
             
     with c_p4:
@@ -503,7 +580,6 @@ if st.session_state['carrello']:
                 raggruppo = {}
                 for r in st.session_state['carrello']:
                     art = r["Articolo"]
-                    
                     label_prezzo = "Prezzo Netto:"
                             
                     if art not in raggruppo:
@@ -511,7 +587,7 @@ if st.session_state['carrello']:
                     
                     if r["Quantità"] > 0:
                         if r["Taglia"] == "-": raggruppo[art]["T"].append(f"Q.tà: {r['Quantità']}pz")
-                        else: raggruppo[art]["T"].append(f"Tg{r['Taglia']}: {r['Quantità']}pz")
+                        else: raggruppo[art]["T"].append(f"Tg {r['Taglia']}: {r['Quantità']}pz")
                     
                     if isinstance(r["Totale Riga"], (int, float)):
                         raggruppo[art]["Tot"] += r["Totale Riga"]
@@ -564,10 +640,13 @@ if st.session_state['carrello']:
 
                     pdf.set_xy(10, y_inizio)
                     pdf.set_font("helvetica", "B", 12)
+                    # "art" per Payper contiene già B-C-E-F uniti
                     pdf.cell(110, 7, f"Modello: {art}", ln=1) 
+                    
                     if dati.get("Normativa"):
-                        pdf.set_font("helvetica", "I", 9) 
-                        pdf.cell(110, 5, f"Normativa: {dati['Normativa']}", ln=1) 
+                        pdf.set_font("helvetica", "I", 9)
+                        # Normativa qui contiene "Articolo: [C] | Descrizione: [I]" per Payper
+                        pdf.cell(110, 5, dati['Normativa'], ln=1) 
                     
                     pdf.set_font("helvetica", "", 10)
                     pdf.cell(110, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1) 
@@ -622,7 +701,7 @@ if st.session_state['carrello']:
                     pdf.set_font("helvetica", "B", 14)
                     pdf.cell(0, 10, f"TOTALE GENERALE: {totale_generale:.2f} Euro", ln=1, align="R")
                     pdf.set_font("helvetica", "I", 12)
-                    pdf.cell(0, 6, f"(Totale Paia Complessive: {totale_paia_carrello})", ln=1, align="R")
+                    pdf.cell(0, 6, f"(Totale Pezzi Complessivi: {totale_paia_carrello})", ln=1, align="R")
 
                 pdf.ln(5)
                 pdf.set_font("helvetica", "B", 10)
@@ -677,6 +756,7 @@ if st.session_state['carrello']:
         
         sconti_base = (sc1, sc2, sc3)
         sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
+        sconti_payper = (sc_pay1, sc_pay2, sc_pay3)
         
         st.download_button(
             label="⬇️ Scarica PDF e Salva in Archivio 💾",
@@ -686,7 +766,7 @@ if st.session_state['carrello']:
             use_container_width=True,
             type="primary",
             on_click=esegui_azioni_finali,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper)
         )
         
         if 'esito_cloud' in st.session_state:
