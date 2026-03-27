@@ -18,10 +18,6 @@ from decimal import Decimal, ROUND_HALF_UP
 # --- FUNZIONE DI ARROTONDAMENTO COMMERCIALE ---
 # =========================================================
 def arrotonda(valore):
-    """
-    Arrotonda il valore al secondo decimale per eccesso commerciale.
-    Es. 23.555 -> 23.56
-    """
     return float(Decimal(str(valore)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 # =========================================================
@@ -34,40 +30,27 @@ miei_headers = {
 
 @st.cache_data
 def estrai_immagine_da_web(url):
-    """
-    Se il link è una pagina web (come per Actionwear), va a cercare 
-    il link reale dell'immagine all'interno del codice del sito!
-    """
     url = str(url).strip()
     if not url or not url.startswith('http'):
         return url
-        
-    # Se è già un'immagine diretta (jpg, png, ecc.), non fa nulla
     if any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']):
         return url
-        
     try:
         res = requests.get(url, headers=miei_headers, timeout=5)
         if res.status_code == 200:
             html = res.text
-            
-            # Cerca il tag standard delle immagini (Open Graph) usato dagli e-commerce
             match = re.search(r'property="og:image"\s+content="([^"]+)"', html, re.IGNORECASE)
             if not match:
                 match = re.search(r'content="([^"]+)"\s+property="og:image"', html, re.IGNORECASE)
-                
             if match:
                 img_src = match.group(1)
                 return urljoin(url, img_src)
-                
-            # Fallback di sicurezza: prima immagine ragionevolmente valida non di logo
             immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
             for img in immagini:
                 if "logo" not in img.lower() and (".jpg" in img.lower() or ".png" in img.lower() or ".webp" in img.lower()):
                     return urljoin(url, img)
     except:
         pass
-        
     return url
 
 # =========================================================
@@ -93,7 +76,6 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_bas
     ora_attuale = datetime.now(fuso_italia)
     
     id_univoco = None
-    
     for key in list(storico.keys()):
         if key.startswith(f"{cliente} - "):
             date_str = key.replace(f"{cliente} - ", "")
@@ -181,17 +163,13 @@ def carica_dati(path, tipo="base"):
                     data[f"Extra_{_}"] = ""
             data = data.iloc[:, :13]
             data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'LISTINO', 'IMMAGINE']
-            
             for col in ['B', 'C', 'E', 'F', 'I']:
                 data[col] = data[col].fillna("").astype(str)
-            
             data['SEARCH_COL'] = data['B'] + " " + data['C'] + " " + data['E'] + " " + data['F']
-            
             def build_art(row):
                 parts = [row['B'], row['C'], row['E'], row['F']]
                 return " - ".join([p.strip() for p in parts if p.strip() and str(p).lower() != 'nan'])
             data['ARTICOLO'] = data.apply(build_art, axis=1)
-            
             data['NORMATIVA'] = "Articolo: " + data['C'] + " | Descrizione: " + data['I']
             
         elif tipo == "actionwear":
@@ -201,24 +179,17 @@ def carica_dati(path, tipo="base"):
                     data[f"Extra_{_}"] = ""
             data = data.iloc[:, :11]
             data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'IMMAGINE', 'LISTINO']
-            
             for col in ['B', 'C', 'D', 'E', 'I']:
                 data[col] = data[col].fillna("").astype(str)
-            
             data['SEARCH_COL'] = data['C'] + " " + data['D'] + " " + data['I']
-            
             def build_art_aw(row):
                 parts = [row['C'], row['D'], row['E']]
                 return " - ".join([p.strip() for p in parts if p.strip() and str(p).lower() != 'nan'])
             data['ARTICOLO'] = data.apply(build_art_aw, axis=1)
-            
-            # Formattazione per mandare a capo i testi ed eliminare il .0 dalle pagine!
             def pulisci_norm_aw(row):
                 pag = str(row['B']).strip()
-                if pag.endswith('.0'): 
-                    pag = pag[:-2]
+                if pag.endswith('.0'): pag = pag[:-2]
                 return f"Articolo: {row['C']}\nPagina Catalogo: {pag}\nMinimo acquistabile: {row['I']}"
-                
             data['NORMATIVA'] = data.apply(pulisci_norm_aw, axis=1)
             
         else:
@@ -226,15 +197,12 @@ def carica_dati(path, tipo="base"):
             if len(nomi_colonne) > 5: nomi_colonne[5] = 'NORMATIVA' 
             data.columns = nomi_colonne
             
-        # --- FIX PREZZI ---
         if 'LISTINO' in data.columns:
             def clean_price(val):
                 if pd.isna(val): return 0.0
                 v_str = str(val).replace('€', '').replace(' ', '').replace(',', '.').strip()
-                try:
-                    return float(v_str)
-                except:
-                    return 0.0
+                try: return float(v_str)
+                except: return 0.0
             data['LISTINO'] = data['LISTINO'].apply(clean_price)
             
         return data
@@ -253,17 +221,9 @@ def aggiorna_prezzi_automaticamente():
     if not st.session_state.get('carrello'): return
         
     sc_b1 = st.session_state.get('sc_base1', 0.0)
-    sc_b2 = st.session_state.get('sc_base2', 0.0)
-    sc_b3 = st.session_state.get('sc_base3', 0.0)
     sc_a1 = st.session_state.get('sc_atg1', 0.0)
-    sc_a2 = st.session_state.get('sc_atg2', 0.0)
-    sc_a3 = st.session_state.get('sc_atg3', 0.0)
     sc_p1 = st.session_state.get('sc_payper1', 0.0)
-    sc_p2 = st.session_state.get('sc_payper2', 0.0)
-    sc_p3 = st.session_state.get('sc_payper3', 0.0)
     sc_aw1 = st.session_state.get('sc_aw1', 0.0)
-    sc_aw2 = st.session_state.get('sc_aw2', 0.0)
-    sc_aw3 = st.session_state.get('sc_aw3', 0.0)
     
     aggiornati = False
     for riga in st.session_state['carrello']:
@@ -271,8 +231,7 @@ def aggiorna_prezzi_automaticamente():
         listino = 0.0
         catalogo = ""
         
-        if art.startswith("⚠️"):
-            continue
+        if art.startswith("⚠️"): continue
             
         if df_base is not None and art in df_base['ARTICOLO'].values:
             listino = float(df_base[df_base['ARTICOLO'] == art].iloc[0]['LISTINO'])
@@ -287,16 +246,11 @@ def aggiorna_prezzi_automaticamente():
             listino = float(df_actionwear[df_actionwear['ARTICOLO'] == art].iloc[0]['LISTINO'])
             catalogo = "Listino Actionwear"
         
-        if catalogo == "Listino Base":
-            molt = (1 - sc_b1/100) * (1 - sc_b2/100) * (1 - sc_b3/100)
-        elif catalogo == "Listino ATG":
-            molt = (1 - sc_a1/100) * (1 - sc_a2/100) * (1 - sc_a3/100)
-        elif catalogo == "Listino Payper":
-            molt = (1 - sc_p1/100) * (1 - sc_p2/100) * (1 - sc_p3/100)
-        elif catalogo == "Listino Actionwear":
-            molt = (1 - sc_aw1/100) * (1 - sc_aw2/100) * (1 - sc_aw3/100)
-        else:
-            continue
+        if catalogo == "Listino Base": molt = (1 - sc_b1/100)
+        elif catalogo == "Listino ATG": molt = (1 - sc_a1/100)
+        elif catalogo == "Listino Payper": molt = (1 - sc_p1/100)
+        elif catalogo == "Listino Actionwear": molt = (1 - sc_aw1/100)
+        else: continue
             
         nuovo_netto = arrotonda(listino * molt)
         riga["Netto U."] = f"{nuovo_netto:.2f} €"
@@ -316,6 +270,11 @@ def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_
     else: st.session_state['msg_errore'] = msg
 
 def esegui_caricamento(d):
+    def get_single_discount(data, key):
+        val = data.get(key, 0.0)
+        if isinstance(val, list): return val[0] if val else 0.0
+        return float(val)
+
     st.session_state['carrello'] = d.get('carrello', [])
     st.session_state['nome_cliente_input'] = d.get('cliente', '')
     st.session_state['nome_referente_input'] = d.get('referente', '')
@@ -323,20 +282,13 @@ def esegui_caricamento(d):
     st.session_state['pagamento_input'] = d.get('pagamento', '')
     st.session_state['trasporto_input'] = d.get('trasporto', '')
     st.session_state['validita_input'] = d.get('validita', '30.06.2026')
-    st.session_state['sc_base1'] = d.get('sconti_base', [0.0, 0.0, 0.0])[0]
-    st.session_state['sc_base2'] = d.get('sconti_base', [0.0, 0.0, 0.0])[1]
-    st.session_state['sc_base3'] = d.get('sconti_base', [0.0, 0.0, 0.0])[2]
-    st.session_state['sc_atg1'] = d.get('sconti_atg', [0.0, 0.0, 0.0])[0]
-    st.session_state['sc_atg2'] = d.get('sconti_atg', [0.0, 0.0, 0.0])[1]
-    st.session_state['sc_atg3'] = d.get('sconti_atg', [0.0, 0.0, 0.0])[2]
-    st.session_state['sc_payper1'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[0]
-    st.session_state['sc_payper2'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[1]
-    st.session_state['sc_payper3'] = d.get('sconti_payper', [0.0, 0.0, 0.0])[2]
-    st.session_state['sc_aw1'] = d.get('sconti_actionwear', [0.0, 0.0, 0.0])[0]
-    st.session_state['sc_aw2'] = d.get('sconti_actionwear', [0.0, 0.0, 0.0])[1]
-    st.session_state['sc_aw3'] = d.get('sconti_actionwear', [0.0, 0.0, 0.0])[2]
+    
+    st.session_state['sc_base1'] = get_single_discount(d, 'sconti_base')
+    st.session_state['sc_atg1'] = get_single_discount(d, 'sconti_atg')
+    st.session_state['sc_payper1'] = get_single_discount(d, 'sconti_payper')
+    st.session_state['sc_aw1'] = get_single_discount(d, 'sconti_actionwear')
 
-def callback_aggiungi_taglie(articolo, img, normativa, prezzo, taglie, catalogo):
+def callback_aggiungi_taglie(articolo, img, normativa, prezzo, note_art, taglie, catalogo):
     aggiunti = False
     st.session_state['ultima_modalita'] = "Specifica Taglie"
     for t in taglie:
@@ -347,20 +299,20 @@ def callback_aggiungi_taglie(articolo, img, normativa, prezzo, taglie, catalogo)
                 "Articolo": articolo, "Taglia": t, "Quantità": q,
                 "Netto U.": f"{arrotonda(prezzo):.2f} €", 
                 "Totale Riga": arrotonda(prezzo * q),
-                "Immagine": img, "Normativa": normativa
+                "Immagine": img, "Normativa": normativa, "NoteArticolo": note_art
             })
             st.session_state[key] = 0  
             aggiunti = True
     if aggiunti: st.session_state['msg_successo'] = "Aggiunto!"
 
-def callback_aggiungi_generico(articolo, img, normativa, prezzo):
+def callback_aggiungi_generico(articolo, img, normativa, prezzo, note_art):
     st.session_state['ultima_modalita'] = "Solo Modello/Vetrina"
     q = st.session_state.get('qta_generica_input', 0)
     st.session_state['carrello'].append({
         "Articolo": articolo, "Taglia": "-", "Quantità": q,
         "Netto U.": f"{arrotonda(prezzo):.2f} €", 
         "Totale Riga": arrotonda(prezzo * q),
-        "Immagine": img, "Normativa": normativa
+        "Immagine": img, "Normativa": normativa, "NoteArticolo": note_art
     })
     st.session_state['qta_generica_input'] = 0  
     st.session_state['msg_successo'] = "Aggiunto!"
@@ -382,32 +334,20 @@ nome_cliente = st.sidebar.text_input("Nome del Cliente:", placeholder="Ragione S
 nome_referente = st.sidebar.text_input("Nome Referente:", placeholder="Mario Rossi...", key="nome_referente_input")
 
 st.sidebar.divider()
-st.sidebar.header("💰 Sconto Base")
-col_sc1, col_sc2, col_sc3 = st.sidebar.columns(3)
-sc1 = col_sc1.number_input("Sc. 1 %", 0.0, 100.0, 0.0, key="sc_base1", on_change=aggiorna_prezzi_automaticamente)
-sc2 = col_sc2.number_input("Sc. 2 %", 0.0, 100.0, 0.0, key="sc_base2", on_change=aggiorna_prezzi_automaticamente)
-sc3 = col_sc3.number_input("Sc. 3 %", 0.0, 100.0, 0.0, key="sc_base3", on_change=aggiorna_prezzi_automaticamente)
-
-st.sidebar.divider()
-st.sidebar.header("🧤 Sconto ATG")
-col_atg1, col_atg2, col_atg3 = st.sidebar.columns(3)
-sc_atg1 = col_atg1.number_input("Sc. ATG 1 %", 0.0, 100.0, 0.0, key="sc_atg1", on_change=aggiorna_prezzi_automaticamente)
-sc_atg2 = col_atg2.number_input("Sc. ATG 2 %", 0.0, 100.0, 0.0, key="sc_atg2", on_change=aggiorna_prezzi_automaticamente)
-sc_atg3 = col_atg3.number_input("Sc. ATG 3 %", 0.0, 100.0, 0.0, key="sc_atg3", on_change=aggiorna_prezzi_automaticamente)
-
-st.sidebar.divider()
 st.sidebar.header("👕 Sconto Payper")
-col_pay1, col_pay2, col_pay3 = st.sidebar.columns(3)
-sc_pay1 = col_pay1.number_input("Sc. Pay 1 %", 0.0, 100.0, 0.0, key="sc_payper1", on_change=aggiorna_prezzi_automaticamente)
-sc_pay2 = col_pay2.number_input("Sc. Pay 2 %", 0.0, 100.0, 0.0, key="sc_payper2", on_change=aggiorna_prezzi_automaticamente)
-sc_pay3 = col_pay3.number_input("Sc. Pay 3 %", 0.0, 100.0, 0.0, key="sc_payper3", on_change=aggiorna_prezzi_automaticamente)
+sc_pay1 = st.sidebar.number_input("Sc. Payper %", 0.0, 100.0, 0.0, key="sc_payper1", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
 st.sidebar.header("🧢 Sconto Actionwear")
-col_aw1, col_aw2, col_aw3 = st.sidebar.columns(3)
-sc_aw1 = col_aw1.number_input("Sc. AW 1 %", 0.0, 100.0, 0.0, key="sc_aw1", on_change=aggiorna_prezzi_automaticamente)
-sc_aw2 = col_aw2.number_input("Sc. AW 2 %", 0.0, 100.0, 0.0, key="sc_aw2", on_change=aggiorna_prezzi_automaticamente)
-sc_aw3 = col_aw3.number_input("Sc. AW 3 %", 0.0, 100.0, 0.0, key="sc_aw3", on_change=aggiorna_prezzi_automaticamente)
+sc_aw1 = st.sidebar.number_input("Sc. Actionwear %", 0.0, 100.0, 0.0, key="sc_aw1", on_change=aggiorna_prezzi_automaticamente)
+
+st.sidebar.divider()
+st.sidebar.header("💰 Sconto Base")
+sc1 = st.sidebar.number_input("Sc. Base %", 0.0, 100.0, 0.0, key="sc_base1", on_change=aggiorna_prezzi_automaticamente)
+
+st.sidebar.divider()
+st.sidebar.header("🧤 Sconto ATG")
+sc_atg1 = st.sidebar.number_input("Sc. ATG %", 0.0, 100.0, 0.0, key="sc_atg1", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
 st.sidebar.header("⚖️ Condizioni Commerciali")
@@ -417,7 +357,7 @@ campo_trasporto = st.sidebar.text_input("Trasporto:", key="trasporto_input")
 campo_validita = st.sidebar.text_input("Validità Offerta:", key="validita_input")
 
 st.sidebar.divider()
-note_preventivo = st.sidebar.text_area("📝 Note Aggiuntive:", height=200, key="note_input")
+note_preventivo = st.sidebar.text_area("📝 Note Aggiuntive (Fine Pagina):", height=200, key="note_input")
 
 st.sidebar.divider()
 st.sidebar.header("📂 Archivio Preventivi")
@@ -434,10 +374,8 @@ if storico:
     
     if scelta_prev != "--- Seleziona ---":
         col_carica, col_elimina = st.sidebar.columns([1, 1])
-        
         with col_carica:
             st.button("⬇️ Carica", use_container_width=True, on_click=esegui_caricamento, args=(storico[scelta_prev],))
-            
         with col_elimina:
             if st.button("❌ Elimina", use_container_width=True):
                 st.session_state['conferma_eliminazione_id'] = scelta_prev
@@ -478,7 +416,6 @@ elif os.path.exists("logo.jpg"):
 
 st.markdown(f'<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px;"><h1 style="margin: 0; min-width: 250px;">📄 OFFERTE & ORDINI</h1>{logo_html}</div>', unsafe_allow_html=True)
 
-# GESTIONE MESSAGGI DI NOTIFICA
 if 'msg_successo' in st.session_state: st.success(st.session_state.pop('msg_successo'))
 if 'msg_errore' in st.session_state: st.error(st.session_state.pop('msg_errore'))
 if 'msg_warning' in st.session_state: st.warning(st.session_state.pop('msg_warning'))
@@ -486,7 +423,6 @@ if 'msg_warning' in st.session_state: st.warning(st.session_state.pop('msg_warni
 if df_base is None and df_atg is None and df_payper is None and df_actionwear is None:
     st.warning("⚠️ Nessun file Excel trovato.")
 else:
-    # --- SEZIONE: RICERCA MANUALE ---
     ricerca = st.text_input("🟢 Inserisci nome modello (Ricerca Manuale):", placeholder="Cerca su tutto il catalogo...").upper()
 
     if ricerca:
@@ -518,32 +454,26 @@ else:
             d = risultato_completo[risultato_completo['ARTICOLO'] == scelta].iloc[0]
             
             catalogo_selezionato = d['CATALOGO_PROVENIENZA']
-            
-            # --- MAGIA ESTRAZIONE IMMAGINE ---
             img_url_originale = str(d.get('IMMAGINE', '')).strip()
-            # Questa riga trasforma la url del sito action-wear nell'immagine vera e propria
             img_url_reale = estrai_immagine_da_web(img_url_originale)
             
-            # Gestione dinamica Normativa
             normativa_articolo = ""
             if catalogo_selezionato in ["Listino Base", "Listino Payper", "Listino Actionwear"]:
                 normativa_articolo = str(d.get('NORMATIVA', '')).strip()
-                
             if normativa_articolo.lower() in ["nan", "none", "", "nat", "null"]: 
                 normativa_articolo = ""
             
-            # Applicazione sconti dinamici
             if catalogo_selezionato == "Listino Base":
-                sconto_applicato = (sc1, sc2, sc3)
+                sconto_applicato = sc1
                 taglie_disponibili = list(range(35, 51))
             elif catalogo_selezionato == "Listino ATG":
-                sconto_applicato = (sc_atg1, sc_atg2, sc_atg3)
+                sconto_applicato = sc_atg1
                 taglie_disponibili = [6, 7, 8, 9, 10, 11, 12]
             elif catalogo_selezionato == "Listino Payper":
-                sconto_applicato = (sc_pay1, sc_pay2, sc_pay3)
+                sconto_applicato = sc_pay1
                 taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
             elif catalogo_selezionato == "Listino Actionwear":
-                sconto_applicato = (sc_aw1, sc_aw2, sc_aw3)
+                sconto_applicato = sc_aw1
                 taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
             
             st.divider()
@@ -552,20 +482,17 @@ else:
                 st.subheader(f"Modello: {d['ARTICOLO']}")
                 st.caption(f"📍 Trovato in: **{catalogo_selezionato}**") 
                 
-                try:
-                    prezzo_listino = float(d['LISTINO'])
-                except:
-                    prezzo_listino = 0.0
+                try: prezzo_listino = float(d['LISTINO'])
+                except: prezzo_listino = 0.0
                     
                 st.markdown(f"🏷️ **Prezzo di Listino:** {prezzo_listino:.2f} €")
-                
                 if normativa_articolo:
                     if catalogo_selezionato in ["Listino Payper", "Listino Actionwear"]:
                         st.markdown(f"**Info:**\n{normativa_articolo}")
                     else:
                         st.markdown(f"🛡️ **Normativa:** {normativa_articolo}")
                 
-                moltiplicatore = (1 - sconto_applicato[0]/100) * (1 - sconto_applicato[1]/100) * (1 - sconto_applicato[2]/100)
+                moltiplicatore = (1 - sconto_applicato/100)
                 prezzo_netto_calcolato = arrotonda(prezzo_listino * moltiplicatore)
                 
                 col_p1, col_p2 = st.columns(2)
@@ -573,6 +500,8 @@ else:
                 with col_p2: prezzo_netto_manuale = st.number_input("Modifica Prezzo Netto (€):", min_value=0.0, value=None, step=0.10)
                 
                 prezzo_netto_finale = prezzo_netto_manuale if prezzo_netto_manuale and prezzo_netto_manuale > 0 else prezzo_netto_calcolato
+                
+                note_articolo_input = st.text_input("📝 Note Riga per PDF (opzionale):", placeholder="Es. Stampa logo a colori lato cuore...", key=f"note_art_{d['ARTICOLO']}")
                 
                 st.divider()
                 
@@ -599,11 +528,10 @@ else:
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_taglie, 
-                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, taglie_disponibili, catalogo_selezionato)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, taglie_disponibili, catalogo_selezionato)
                     )
                 else:
                     st.number_input("Quantità totale:", min_value=0, step=1, key='qta_generica_input')
-                    
                     q = st.session_state.get('qta_generica_input', 0)
                     if q == 0:
                         st.info(f"👁️ Verrà aggiunto come **Solo Vetrina/Proposta** (Quantità: 0)")
@@ -615,7 +543,7 @@ else:
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_generico,
-                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input)
                     )
             with c2:
                 if img_url_reale.startswith('http'):
@@ -638,10 +566,8 @@ if st.session_state['carrello']:
         c3.write(str(riga["Quantità"]))
         c4.write(str(riga["Netto U."]))
         
-        if isinstance(riga['Totale Riga'], (int, float)):
-            c5.write(f"{riga['Totale Riga']:.2f} €")
-        else:
-            c5.write("0.00 €")
+        if isinstance(riga['Totale Riga'], (int, float)): c5.write(f"{riga['Totale Riga']:.2f} €")
+        else: c5.write("0.00 €")
             
         c6.button("❌", key=f"del_{index}", on_click=callback_elimina_riga, args=(index,))
             
@@ -653,25 +579,15 @@ if st.session_state['carrello']:
     with col_totale2: st.markdown(f"### Totale Pezzi: **{totale_paia_carrello}**")
     
     st.divider()
-    
     c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-    
-    with c_p1:
-        st.button("🗑️ Svuota Tutto", use_container_width=True, on_click=callback_svuota_tutto)
-        
-    with c_p2:
-        st.button("🔄 Ricalcola Prezzi", use_container_width=True, on_click=aggiorna_prezzi_automaticamente)
-        
+    with c_p1: st.button("🗑️ Svuota Tutto", use_container_width=True, on_click=callback_svuota_tutto)
+    with c_p2: st.button("🔄 Ricalcola Prezzi", use_container_width=True, on_click=aggiorna_prezzi_automaticamente)
     with c_p3:
-        sconti_base = (sc1, sc2, sc3)
-        sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
-        sconti_payper = (sc_pay1, sc_pay2, sc_pay3)
-        sconti_actionwear = (sc_aw1, sc_aw2, sc_aw3)
         st.button(
             "💾 Salva Preventivo", 
             use_container_width=True, 
             on_click=callback_salva_solo,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper, sconti_actionwear)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc1, sc_atg1, sc_pay1, sc_aw1)
         )
             
     with c_p4:
@@ -685,7 +601,7 @@ if st.session_state['carrello']:
                     label_prezzo = "Prezzo Netto:"
                             
                     if art not in raggruppo:
-                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto": r["Netto U."], "Normativa": r.get("Normativa", ""), "Label": label_prezzo}
+                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto": r["Netto U."], "Normativa": r.get("Normativa", ""), "Label": label_prezzo, "NoteArticolo": r.get("NoteArticolo", "")}
                     
                     if r["Quantità"] > 0:
                         if r["Taglia"] == "-": raggruppo[art]["T"].append(f"Q.tà: {r['Quantità']}pz")
@@ -709,10 +625,8 @@ if st.session_state['carrello']:
                                                 logo_path = tmp_logo.name
                                             self.image(logo_path, 5, 4, 70) 
                                             os.remove(logo_path)
-                                        else:
-                                            self.image(f, 5, 4, 70) 
-                                except Exception:
-                                    self.image(f, 5, 4, 70)
+                                        else: self.image(f, 5, 4, 70) 
+                                except Exception: self.image(f, 5, 4, 70)
                                 break
                                 
                         if self.page_no() == 1:
@@ -728,7 +642,6 @@ if st.session_state['carrello']:
                             data_formattata = datetime.now(fuso_italia).strftime("%d.%m.%Y")
                             self.set_font("helvetica", "I", 11)
                             self.cell(0, 7, f"Data: {data_formattata}", align="R", ln=1)
-                        
                         self.set_y(60)
 
                 pdf = PDF()
@@ -740,75 +653,63 @@ if st.session_state['carrello']:
                         pdf.add_page()
                         y_inizio = pdf.get_y()
 
-                    # --- TITOLO ---
                     pdf.set_xy(10, y_inizio)
                     pdf.set_font("helvetica", "B", 12)
                     pdf.multi_cell(120, 6, f"Modello: {art}")
                     
-                    # --- NORMATIVA / DESCRIZIONE ---
                     if dati.get("Normativa"):
                         pdf.set_x(10)
                         pdf.set_font("helvetica", "I", 9)
                         pdf.multi_cell(120, 5, dati['Normativa']) 
                     
-                    # --- PREZZO ---
                     pdf.ln(2) 
                     pdf.set_x(10) 
                     pdf.set_font("helvetica", "B", 13)
                     pdf.cell(120, 6, f"{dati['Label']} {dati['Netto'].replace('€', 'Euro')}", ln=1, align="L") 
                     
-                    # --- TAGLIE ---
                     pdf.ln(1)
                     pdf.set_x(10)
                     pdf.set_font("helvetica", "I", 9)
-                    if dati["T"]:
-                        pdf.multi_cell(120, 5, " | ".join(dati["T"])) 
-                    else:
-                        pdf.cell(120, 5, "Proposta Modello", ln=1) 
+                    if dati["T"]: pdf.multi_cell(120, 5, " | ".join(dati["T"])) 
+                    else: pdf.cell(120, 5, "Proposta Modello", ln=1) 
                     
-                    # --- SUBTOTALE ---
+                    # --- NOTE ARTICOLO (Nuova Funzionalità) ---
+                    if dati.get("NoteArticolo"):
+                        pdf.set_x(10)
+                        pdf.set_font("helvetica", "BI", 9) # B=Bold, I=Italic (Grassetto Diagonale)
+                        pdf.multi_cell(120, 5, dati['NoteArticolo']) 
+                    
                     if dati['Tot'] > 0:
                         pdf.set_x(10)
                         pdf.set_font("helvetica", "B", 10)
                         pdf.cell(120, 6, f"Subtotale: {dati['Tot']:.2f} Euro", ln=1, align="L") 
                     
                     y_fine_testo = pdf.get_y()
-                    
-                    # --- IMMAGINE AD ALTA QUALITA' ---
                     y_fine_immagine = y_inizio
                     if dati["Img"] and dati["Img"].startswith("http"):
                         try:
                             res = requests.get(dati["Img"], headers=miei_headers, timeout=5)
                             if res.status_code == 200:
-                                # Usiamo PIL per elaborare l'immagine al massimo della risoluzione
                                 with Image.open(BytesIO(res.content)) as img:
-                                    # Se l'immagine ha uno sfondo trasparente (es. PNG), la convertiamo in RGB su sfondo bianco
                                     if img.mode in ('RGBA', 'LA', 'P'):
                                         background = Image.new('RGB', img.size, (255, 255, 255))
-                                        if img.mode == 'RGBA':
-                                            background.paste(img, mask=img.split()[3])
-                                        else:
-                                            background.paste(img)
+                                        if img.mode == 'RGBA': background.paste(img, mask=img.split()[3])
+                                        else: background.paste(img)
                                         img = background
-                                    elif img.mode != 'RGB':
-                                        img = img.convert('RGB')
+                                    elif img.mode != 'RGB': img = img.convert('RGB')
                                     
                                     w_px, h_px = img.size
                                     aspect_ratio = w_px / h_px
-                                    
                                     max_box = 55.0 
                                     
                                     if aspect_ratio > 1: 
-                                        final_w = max_box
-                                        final_h = max_box / aspect_ratio
+                                        final_w, final_h = max_box, max_box / aspect_ratio
                                     else: 
-                                        final_h = max_box
-                                        final_w = max_box * aspect_ratio
+                                        final_h, final_w = max_box, max_box * aspect_ratio
                                 
                                     x_pos = 140 + (max_box - final_w) / 2
                                     y_pos = y_inizio + (max_box - final_h) / 2
                                     
-                                    # Salviamo un file JPG temporaneo imponendo la QUALITA' 100
                                     with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                                         img.save(tmp, format='JPEG', quality=100, subsampling=0)
                                         tmp_name = tmp.name
@@ -817,7 +718,6 @@ if st.session_state['carrello']:
                                     y_fine_immagine = y_inizio + max_box
                         except: pass
                     
-                    # --- LINEA SEPARATRICE ---
                     pdf.set_y(max(y_fine_testo, y_fine_immagine) + 5)
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                     pdf.ln(5)
@@ -844,11 +744,8 @@ if st.session_state['carrello']:
                     pdf.set_font("helvetica", "", 11)
                     pdf.multi_cell(0, 6, note_preventivo)
 
-                # --- FIRMA FISSA ---
                 pdf.ln(15)
-                y_corrente = pdf.get_y()
-                if y_corrente > 265:
-                    pdf.add_page()
+                if pdf.get_y() > 265: pdf.add_page()
                 pdf.set_font("helvetica", "B", 11)
                 pdf.cell(0, 5, "CIEFFE snc", ln=1, align="R")
 
@@ -871,20 +768,13 @@ if st.session_state['carrello']:
                 except: pass
 
                 nome_sicuro = nome_cliente if nome_cliente else "Cliente"
-                fuso_italia = pytz.timezone('Europe/Rome')
-                data_odierna = datetime.now(fuso_italia).strftime("%d.%m.%Y")
+                data_odierna = datetime.now(pytz.timezone('Europe/Rome')).strftime("%d.%m.%Y")
                 st.session_state['pdf_pronto'] = pdf_bytes
                 st.session_state['nome_file_pronto'] = f"{nome_sicuro}_{data_odierna}.pdf"
 
     if 'pdf_pronto' in st.session_state:
         st.divider()
         st.success("✅ PDF Generato! Clicca il pulsante qui sotto per completare tutte le operazioni.")
-        
-        sconti_base = (sc1, sc2, sc3)
-        sconti_atg = (sc_atg1, sc_atg2, sc_atg3)
-        sconti_payper = (sc_pay1, sc_pay2, sc_pay3)
-        sconti_actionwear = (sc_aw1, sc_aw2, sc_aw3)
-        
         st.download_button(
             label="⬇️ Scarica PDF e Salva in Archivio 💾",
             data=st.session_state['pdf_pronto'],
@@ -893,9 +783,8 @@ if st.session_state['carrello']:
             use_container_width=True,
             type="primary",
             on_click=esegui_azioni_finali,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sconti_base, sconti_atg, sconti_payper, sconti_actionwear)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc1, sc_atg1, sc_pay1, sc_aw1)
         )
-        
         if 'esito_cloud' in st.session_state:
             if st.session_state['esito_cloud'][0]: st.success(st.session_state['esito_cloud'][1])
             else: st.error(st.session_state['esito_cloud'][1])
