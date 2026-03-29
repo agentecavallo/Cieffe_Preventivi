@@ -49,25 +49,40 @@ def estrai_immagine_da_web(url):
 
 @st.cache_data
 def cerca_immagine_jrc(codice):
-    """Cerca attivamente sul sito James Ross usando il codice articolo."""
+    """Cerca attivamente sul sito James Ross usando un metodo universale basato sul codice."""
     codice = str(codice).strip()
     if not codice: return ""
-    urls_to_try = [
-        f"https://www.jamesross.it/ricerca?q={codice}",
-        f"https://www.jamesross.it/it/ricerca?q={codice}",
-        f"https://www.jamesross.it/prodotti.html?search={codice}"
-    ]
-    for url in urls_to_try:
-        try:
-            res = requests.get(url, headers=miei_headers, timeout=5)
-            if res.status_code == 200:
-                html = res.text
-                immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
-                for img in immagini:
-                    # Cerchiamo un'immagine prodotto verosimile
-                    if "logo" not in img.lower() and "icon" not in img.lower() and (".jpg" in img.lower() or ".png" in img.lower()):
-                        return urljoin(url, img)
-        except: pass
+    
+    url_ricerca = f"https://www.jamesross.it/it/ricerca?q={codice}"
+    try:
+        res = requests.get(url_ricerca, headers=miei_headers, timeout=5)
+        if res.status_code == 200:
+            html = res.text
+            
+            # Estraiamo tutte le immagini dalla pagina dei risultati
+            immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
+            
+            img_valide = []
+            for img in immagini:
+                img_lower = img.lower()
+                # Scartiamo spazzatura visiva
+                if any(x in img_lower for x in ["logo", "icon", "svg", "banner", "spinner", "loader"]):
+                    continue
+                if any(img_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                    img_valide.append(img)
+            
+            # 1. Ricerca Universale: Il nome dell'immagine contiene il codice?
+            # Puliamo il codice da trattini o spazi per fare un match più sicuro
+            codice_pulito = re.sub(r'[^a-zA-Z0-9]', '', codice.lower())
+            for img in img_valide:
+                nome_img_pulito = re.sub(r'[^a-zA-Z0-9]', '', img.lower())
+                if codice_pulito in nome_img_pulito:
+                    return urljoin(url_ricerca, img)
+            
+            # 2. Fallback intelligente: Se non c'è il codice esatto, prende la prima foto vera di prodotto
+            if img_valide:
+                return urljoin(url_ricerca, img_valide[0])
+    except: pass
     return ""
 
 # =========================================================
