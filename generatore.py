@@ -31,27 +31,44 @@ miei_headers = {
 @st.cache_data
 def estrai_immagine_da_web(url):
     url = str(url).strip()
-    if not url or not url.startswith('http'):
-        return url
-    if any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']):
-        return url
+    if not url or not url.startswith('http'): return url
+    if any(url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']): return url
     try:
         res = requests.get(url, headers=miei_headers, timeout=5)
         if res.status_code == 200:
             html = res.text
             match = re.search(r'property="og:image"\s+content="([^"]+)"', html, re.IGNORECASE)
-            if not match:
-                match = re.search(r'content="([^"]+)"\s+property="og:image"', html, re.IGNORECASE)
-            if match:
-                img_src = match.group(1)
-                return urljoin(url, img_src)
+            if not match: match = re.search(r'content="([^"]+)"\s+property="og:image"', html, re.IGNORECASE)
+            if match: return urljoin(url, match.group(1))
             immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
             for img in immagini:
                 if "logo" not in img.lower() and (".jpg" in img.lower() or ".png" in img.lower() or ".webp" in img.lower()):
                     return urljoin(url, img)
-    except:
-        pass
+    except: pass
     return url
+
+@st.cache_data
+def cerca_immagine_jrc(codice):
+    """Cerca attivamente sul sito James Ross usando il codice articolo."""
+    codice = str(codice).strip()
+    if not codice: return ""
+    urls_to_try = [
+        f"https://www.jamesross.it/ricerca?q={codice}",
+        f"https://www.jamesross.it/it/ricerca?q={codice}",
+        f"https://www.jamesross.it/prodotti.html?search={codice}"
+    ]
+    for url in urls_to_try:
+        try:
+            res = requests.get(url, headers=miei_headers, timeout=5)
+            if res.status_code == 200:
+                html = res.text
+                immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
+                for img in immagini:
+                    # Cerchiamo un'immagine prodotto verosimile
+                    if "logo" not in img.lower() and "icon" not in img.lower() and (".jpg" in img.lower() or ".png" in img.lower()):
+                        return urljoin(url, img)
+        except: pass
+    return ""
 
 # =========================================================
 # --- GESTIONE ARCHIVIO LOCALE ---
@@ -59,15 +76,13 @@ def estrai_immagine_da_web(url):
 FILE_STORICO = "storico_preventivi.json"
 
 def carica_storico():
-    if not os.path.exists(FILE_STORICO):
-        return {}
+    if not os.path.exists(FILE_STORICO): return {}
     try:
         with open(FILE_STORICO, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
-        return {}
+    except Exception: return {}
 
-def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear):
+def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_payper, sc_aw, sc_base, sc_atg, sc_jrc):
     if not cliente: return False, "⚠️ Inserisci almeno il Nome Cliente."
     if not carrello: return False, "⚠️ Il carrello è vuoto."
 
@@ -84,8 +99,7 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_bas
                 if (ora_attuale.replace(tzinfo=None) - dt_obj).total_seconds() <= 3600:
                     id_univoco = key
                     break
-            except ValueError:
-                pass
+            except ValueError: pass
 
     if not id_univoco:
         data_ora = ora_attuale.strftime("%d.%m.%Y %H:%M")
@@ -95,37 +109,25 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_bas
         data_salvataggio = storico[id_univoco]["data_salvataggio"]
 
     storico[id_univoco] = {
-        "data_salvataggio": data_salvataggio,
-        "cliente": cliente,
-        "referente": referente,
-        "note": note,
-        "pagamento": pag,
-        "trasporto": trasp,
-        "validita": val,
-        "sconti_base": sc_base,
-        "sconti_atg": sc_atg,
-        "sconti_payper": sc_payper,
-        "sconti_actionwear": sc_actionwear,
+        "data_salvataggio": data_salvataggio, "cliente": cliente, "referente": referente, "note": note,
+        "pagamento": pag, "trasporto": trasp, "validita": val,
+        "sconti_payper": sc_payper, "sconti_actionwear": sc_aw, "sconti_base": sc_base, "sconti_atg": sc_atg, "sconti_jrc": sc_jrc,
         "carrello": carrello
     }
 
     try:
-        with open(FILE_STORICO, "w", encoding="utf-8") as f:
-            json.dump(storico, f, indent=4)
+        with open(FILE_STORICO, "w", encoding="utf-8") as f: json.dump(storico, f, indent=4)
         return True, "✅ Preventivo salvato in Archivio!"
-    except Exception as e:
-        return False, f"⚠️ Errore di salvataggio: {e}"
+    except Exception as e: return False, f"⚠️ Errore di salvataggio: {e}"
 
 def elimina_preventivo(id_univoco):
     storico = carica_storico()
     if id_univoco in storico:
         del storico[id_univoco]  
         try:
-            with open(FILE_STORICO, "w", encoding="utf-8") as f:
-                json.dump(storico, f, indent=4)
+            with open(FILE_STORICO, "w", encoding="utf-8") as f: json.dump(storico, f, indent=4)
             return True, f"✅ Preventivo eliminato!"
-        except Exception as e:
-            return False, f"⚠️ Errore durante l'eliminazione: {e}"
+        except Exception as e: return False, f"⚠️ Errore durante l'eliminazione: {e}"
     return False, "⚠️ Preventivo non trovato."
 
 # =========================================================
@@ -142,7 +144,6 @@ button[kind="primary"]:hover { background-color: #45a049 !important; }
 """, unsafe_allow_html=True)
 
 if 'carrello' not in st.session_state: st.session_state['carrello'] = []
-
 if 'pagamento_input' not in st.session_state: st.session_state['pagamento_input'] = "Solito in uso"
 if 'trasporto_input' not in st.session_state: st.session_state['trasporto_input'] = "P.to Franco 300,00"
 if 'validita_input' not in st.session_state: st.session_state['validita_input'] = "30.06.2026"
@@ -159,12 +160,10 @@ def carica_dati(path, tipo="base"):
         elif tipo == "payper":
             num_cols = len(data.columns)
             if num_cols < 13:
-                for _ in range(13 - num_cols):
-                    data[f"Extra_{_}"] = ""
+                for _ in range(13 - num_cols): data[f"Extra_{_}"] = ""
             data = data.iloc[:, :13]
             data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'LISTINO', 'IMMAGINE']
-            for col in ['B', 'C', 'E', 'F', 'I']:
-                data[col] = data[col].fillna("").astype(str)
+            for col in ['B', 'C', 'E', 'F', 'I']: data[col] = data[col].fillna("").astype(str)
             data['SEARCH_COL'] = data['B'] + " " + data['C'] + " " + data['E'] + " " + data['F']
             def build_art(row):
                 parts = [row['B'], row['C'], row['E'], row['F']]
@@ -175,12 +174,10 @@ def carica_dati(path, tipo="base"):
         elif tipo == "actionwear":
             num_cols = len(data.columns)
             if num_cols < 11:
-                for _ in range(11 - num_cols):
-                    data[f"Extra_{_}"] = ""
+                for _ in range(11 - num_cols): data[f"Extra_{_}"] = ""
             data = data.iloc[:, :11]
             data.columns = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'IMMAGINE', 'LISTINO']
-            for col in ['B', 'C', 'D', 'E', 'I']:
-                data[col] = data[col].fillna("").astype(str)
+            for col in ['B', 'C', 'D', 'E', 'I']: data[col] = data[col].fillna("").astype(str)
             data['SEARCH_COL'] = data['C'] + " " + data['D'] + " " + data['I']
             def build_art_aw(row):
                 parts = [row['C'], row['D'], row['E']]
@@ -191,6 +188,25 @@ def carica_dati(path, tipo="base"):
                 if pag.endswith('.0'): pag = pag[:-2]
                 return f"Articolo: {row['C']}\nPagina Catalogo: {pag}\nMinimo acquistabile: {row['I']}"
             data['NORMATIVA'] = data.apply(pulisci_norm_aw, axis=1)
+
+        elif tipo == "jrc":
+            num_cols = len(data.columns)
+            if num_cols < 6:
+                for _ in range(6 - num_cols): data[f"Extra_{_}"] = ""
+            data = data.iloc[:, :6]
+            data.columns = ['A', 'B', 'C', 'D', 'E', 'F']
+            for col in ['A', 'B', 'C', 'E', 'F']: data[col] = data[col].fillna("").astype(str)
+            data['SEARCH_COL'] = data['A'] + " " + data['B']
+            def build_art_jrc(row):
+                parts = [row['B'], row['C'], row['E'], row['F']]
+                return " - ".join([p.strip() for p in parts if p.strip() and str(p).lower() != 'nan'])
+            data['ARTICOLO'] = data.apply(build_art_jrc, axis=1)
+            def pulisci_norm_jrc(row):
+                return f"Articolo: {row['A']}\nDescrizione: {row['B']}\nColore: {row['C']} | Composizione: {row['F']}\nGrammatura: {row['E']}"
+            data['NORMATIVA'] = data.apply(pulisci_norm_jrc, axis=1)
+            data['LISTINO'] = data['D']
+            data['IMMAGINE'] = "" 
+            data['CODICE_ORIGINALE'] = data['A'] 
             
         else:
             nomi_colonne = [str(c).strip().upper() for c in data.columns]
@@ -213,6 +229,7 @@ df_base = carica_dati('Listino_agente.xlsx', "base")
 df_atg = carica_dati('Listino_ATG.xlsx', "atg")
 df_payper = carica_dati('listino_payper.xlsx', "payper")
 df_actionwear = carica_dati('listino_actionwear.xlsx', "actionwear")
+df_jrc = carica_dati('listino_jrc.xlsx', "jrc")
 
 # =========================================================
 # --- CALLBACKS ---
@@ -220,10 +237,11 @@ df_actionwear = carica_dati('listino_actionwear.xlsx', "actionwear")
 def aggiorna_prezzi_automaticamente():
     if not st.session_state.get('carrello'): return
         
-    sc_b1 = st.session_state.get('sc_base1', 0.0)
-    sc_a1 = st.session_state.get('sc_atg1', 0.0)
     sc_p1 = st.session_state.get('sc_payper1', 0.0)
     sc_aw1 = st.session_state.get('sc_aw1', 0.0)
+    sc_b1 = st.session_state.get('sc_base1', 0.0)
+    sc_a1 = st.session_state.get('sc_atg1', 0.0)
+    sc_jrc1 = st.session_state.get('sc_jrc1', 0.0)
     
     aggiornati = False
     for riga in st.session_state['carrello']:
@@ -245,11 +263,15 @@ def aggiorna_prezzi_automaticamente():
         elif df_actionwear is not None and art in df_actionwear['ARTICOLO'].values:
             listino = float(df_actionwear[df_actionwear['ARTICOLO'] == art].iloc[0]['LISTINO'])
             catalogo = "Listino Actionwear"
+        elif df_jrc is not None and art in df_jrc['ARTICOLO'].values:
+            listino = float(df_jrc[df_jrc['ARTICOLO'] == art].iloc[0]['LISTINO'])
+            catalogo = "Listino JRC"
         
         if catalogo == "Listino Base": molt = (1 - sc_b1/100)
         elif catalogo == "Listino ATG": molt = (1 - sc_a1/100)
         elif catalogo == "Listino Payper": molt = (1 - sc_p1/100)
         elif catalogo == "Listino Actionwear": molt = (1 - sc_aw1/100)
+        elif catalogo == "Listino JRC": molt = (1 - sc_jrc1/100)
         else: continue
             
         nuovo_netto = arrotonda(listino * molt)
@@ -257,15 +279,14 @@ def aggiorna_prezzi_automaticamente():
         riga["Totale Riga"] = arrotonda(nuovo_netto * riga["Quantità"])
         aggiornati = True
         
-    if aggiornati:
-        st.session_state['msg_successo'] = "🔄 Prezzi ricalcolati in base ai nuovi sconti!"
+    if aggiornati: st.session_state['msg_successo'] = "🔄 Prezzi ricalcolati in base ai nuovi sconti!"
 
-def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear):
-    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear)
+def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1):
+    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1)
     st.session_state['esito_cloud'] = (succ_cl, msg_cl)
 
-def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear):
-    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_base, sc_atg, sc_payper, sc_actionwear)
+def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1):
+    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1)
     if succ: st.session_state['msg_successo'] = msg
     else: st.session_state['msg_errore'] = msg
 
@@ -283,10 +304,11 @@ def esegui_caricamento(d):
     st.session_state['trasporto_input'] = d.get('trasporto', '')
     st.session_state['validita_input'] = d.get('validita', '30.06.2026')
     
-    st.session_state['sc_base1'] = get_single_discount(d, 'sconti_base')
-    st.session_state['sc_atg1'] = get_single_discount(d, 'sconti_atg')
     st.session_state['sc_payper1'] = get_single_discount(d, 'sconti_payper')
     st.session_state['sc_aw1'] = get_single_discount(d, 'sconti_actionwear')
+    st.session_state['sc_base1'] = get_single_discount(d, 'sconti_base')
+    st.session_state['sc_atg1'] = get_single_discount(d, 'sconti_atg')
+    st.session_state['sc_jrc1'] = get_single_discount(d, 'sconti_jrc')
 
 def callback_aggiungi_taglie(articolo, img, normativa, prezzo, note_art, taglie, catalogo):
     aggiunti = False
@@ -319,12 +341,10 @@ def callback_aggiungi_generico(articolo, img, normativa, prezzo, note_art):
 
 def callback_svuota_tutto():
     st.session_state['carrello'] = []
-    for k in ['pdf_pronto', 'esito_cloud']:
-        st.session_state.pop(k, None)
+    for k in ['pdf_pronto', 'esito_cloud']: st.session_state.pop(k, None)
 
 def callback_elimina_riga(idx):
-    if 0 <= idx < len(st.session_state['carrello']):
-        st.session_state['carrello'].pop(idx)
+    if 0 <= idx < len(st.session_state['carrello']): st.session_state['carrello'].pop(idx)
 
 # =========================================================
 # --- SIDEBAR: DATI PRINCIPALI ---
@@ -350,6 +370,10 @@ st.sidebar.header("🧤 Sconto ATG")
 sc_atg1 = st.sidebar.number_input("Sc. ATG %", 0.0, 100.0, 0.0, key="sc_atg1", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
+st.sidebar.header("🧥 Sconto JRC")
+sc_jrc1 = st.sidebar.number_input("Sc. JRC %", 0.0, 100.0, 0.0, key="sc_jrc1", on_change=aggiorna_prezzi_automaticamente)
+
+st.sidebar.divider()
 st.sidebar.header("⚖️ Condizioni Commerciali")
 
 campo_pagamento = st.sidebar.text_input("Pagamento:", key="pagamento_input")
@@ -366,16 +390,12 @@ storico = carica_storico()
 if storico:
     ricerca_cliente = st.sidebar.text_input("🔍 Cerca cliente salvato:", placeholder="Digita per filtrare...")
     opzioni_preventivi = list(storico.keys())[::-1] 
-    
-    if ricerca_cliente:
-        opzioni_preventivi = [p for p in opzioni_preventivi if ricerca_cliente.lower() in p.lower()]
-    
+    if ricerca_cliente: opzioni_preventivi = [p for p in opzioni_preventivi if ricerca_cliente.lower() in p.lower()]
     scelta_prev = st.sidebar.selectbox("Scegli un preventivo da gestire:", ["--- Seleziona ---"] + opzioni_preventivi)
     
     if scelta_prev != "--- Seleziona ---":
         col_carica, col_elimina = st.sidebar.columns([1, 1])
-        with col_carica:
-            st.button("⬇️ Carica", use_container_width=True, on_click=esegui_caricamento, args=(storico[scelta_prev],))
+        with col_carica: st.button("⬇️ Carica", use_container_width=True, on_click=esegui_caricamento, args=(storico[scelta_prev],))
         with col_elimina:
             if st.button("❌ Elimina", use_container_width=True):
                 st.session_state['conferma_eliminazione_id'] = scelta_prev
@@ -391,8 +411,7 @@ if storico:
                     if successo_elim:
                         st.sidebar.success(msg_elim)
                         st.rerun() 
-                    else:
-                        st.sidebar.error(msg_elim)
+                    else: st.sidebar.error(msg_elim)
             with col_no:
                 if st.button("❌ NO", use_container_width=True):
                     st.session_state.pop('conferma_eliminazione_id', None)
@@ -420,7 +439,7 @@ if 'msg_successo' in st.session_state: st.success(st.session_state.pop('msg_succ
 if 'msg_errore' in st.session_state: st.error(st.session_state.pop('msg_errore'))
 if 'msg_warning' in st.session_state: st.warning(st.session_state.pop('msg_warning'))
 
-if df_base is None and df_atg is None and df_payper is None and df_actionwear is None:
+if df_base is None and df_atg is None and df_payper is None and df_actionwear is None and df_jrc is None:
     st.warning("⚠️ Nessun file Excel trovato.")
 else:
     ricerca = st.text_input("🟢 Inserisci nome modello (Ricerca Manuale):", placeholder="Cerca su tutto il catalogo...").upper()
@@ -447,6 +466,11 @@ else:
             if not r_aw.empty:
                 r_aw['CATALOGO_PROVENIENZA'] = "Listino Actionwear"
                 risultati_trovati.append(r_aw)
+        if df_jrc is not None:
+            r_jrc = df_jrc[df_jrc['SEARCH_COL'].astype(str).str.upper().str.contains(ricerca, na=False)].copy()
+            if not r_jrc.empty:
+                r_jrc['CATALOGO_PROVENIENZA'] = "Listino JRC"
+                risultati_trovati.append(r_jrc)
         
         if risultati_trovati:
             risultato_completo = pd.concat(risultati_trovati, ignore_index=True)
@@ -454,11 +478,15 @@ else:
             d = risultato_completo[risultato_completo['ARTICOLO'] == scelta].iloc[0]
             
             catalogo_selezionato = d['CATALOGO_PROVENIENZA']
-            img_url_originale = str(d.get('IMMAGINE', '')).strip()
-            img_url_reale = estrai_immagine_da_web(img_url_originale)
+            
+            if catalogo_selezionato == "Listino JRC":
+                img_url_reale = cerca_immagine_jrc(d.get('CODICE_ORIGINALE', ''))
+            else:
+                img_url_originale = str(d.get('IMMAGINE', '')).strip()
+                img_url_reale = estrai_immagine_da_web(img_url_originale)
             
             normativa_articolo = ""
-            if catalogo_selezionato in ["Listino Base", "Listino Payper", "Listino Actionwear"]:
+            if catalogo_selezionato in ["Listino Base", "Listino Payper", "Listino Actionwear", "Listino JRC"]:
                 normativa_articolo = str(d.get('NORMATIVA', '')).strip()
             if normativa_articolo.lower() in ["nan", "none", "", "nat", "null"]: 
                 normativa_articolo = ""
@@ -475,6 +503,9 @@ else:
             elif catalogo_selezionato == "Listino Actionwear":
                 sconto_applicato = sc_aw1
                 taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
+            elif catalogo_selezionato == "Listino JRC":
+                sconto_applicato = sc_jrc1
+                taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
             
             st.divider()
             c1, c2 = st.columns([2, 1])
@@ -487,7 +518,7 @@ else:
                     
                 st.markdown(f"🏷️ **Prezzo di Listino:** {prezzo_listino:.2f} €")
                 if normativa_articolo:
-                    if catalogo_selezionato in ["Listino Payper", "Listino Actionwear"]:
+                    if catalogo_selezionato in ["Listino Payper", "Listino Actionwear", "Listino JRC"]:
                         st.markdown(f"**Info:**\n{normativa_articolo}")
                     else:
                         st.markdown(f"🛡️ **Normativa:** {normativa_articolo}")
@@ -500,7 +531,6 @@ else:
                 with col_p2: prezzo_netto_manuale = st.number_input("Modifica Prezzo Netto (€):", min_value=0.0, value=None, step=0.10)
                 
                 prezzo_netto_finale = prezzo_netto_manuale if prezzo_netto_manuale and prezzo_netto_manuale > 0 else prezzo_netto_calcolato
-                
                 note_articolo_input = st.text_input("📝 Note Riga per PDF (opzionale):", placeholder="Es. Stampa logo a colori lato cuore...", key=f"note_art_{d['ARTICOLO']}")
                 
                 st.divider()
@@ -546,7 +576,7 @@ else:
                         args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input)
                     )
             with c2:
-                if img_url_reale.startswith('http'):
+                if img_url_reale and img_url_reale.startswith('http'):
                     try:
                         r = requests.get(img_url_reale, headers=miei_headers, timeout=5)
                         if r.status_code == 200: st.image(BytesIO(r.content), use_container_width=True)
@@ -587,7 +617,7 @@ if st.session_state['carrello']:
             "💾 Salva Preventivo", 
             use_container_width=True, 
             on_click=callback_salva_solo,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc1, sc_atg1, sc_pay1, sc_aw1)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc_pay1, sc_aw1, sc1, sc_atg1, sc_jrc1)
         )
             
     with c_p4:
@@ -673,10 +703,9 @@ if st.session_state['carrello']:
                     if dati["T"]: pdf.multi_cell(120, 5, " | ".join(dati["T"])) 
                     else: pdf.cell(120, 5, "Proposta Modello", ln=1) 
                     
-                    # --- NOTE ARTICOLO (Nuova Funzionalità) ---
                     if dati.get("NoteArticolo"):
                         pdf.set_x(10)
-                        pdf.set_font("helvetica", "BI", 9) # B=Bold, I=Italic (Grassetto Diagonale)
+                        pdf.set_font("helvetica", "BI", 9) 
                         pdf.multi_cell(120, 5, dati['NoteArticolo']) 
                     
                     if dati['Tot'] > 0:
@@ -783,7 +812,7 @@ if st.session_state['carrello']:
             use_container_width=True,
             type="primary",
             on_click=esegui_azioni_finali,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc1, sc_atg1, sc_pay1, sc_aw1)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc_pay1, sc_aw1, sc1, sc_atg1, sc_jrc1)
         )
         if 'esito_cloud' in st.session_state:
             if st.session_state['esito_cloud'][0]: st.success(st.session_state['esito_cloud'][1])
