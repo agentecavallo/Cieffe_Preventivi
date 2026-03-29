@@ -253,7 +253,7 @@ df_atg = carica_dati('Listino_ATG.xlsx', "atg")
 df_payper = carica_dati('listino_payper.xlsx', "payper")
 df_actionwear = carica_dati('listino_actionwear.xlsx', "actionwear")
 df_jrc = carica_dati('listino_jrc.xlsx', "jrc")
-df_milw = carica_dati('listino_Milw.xlsx', "milw")
+df_milw = carica_dati('Listino_Milw.xlsx', "milw") # CORRETTO NOME FILE (MAIUSCOLE)
 
 # =========================================================
 # --- CALLBACKS ---
@@ -551,7 +551,7 @@ else:
                 taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
             elif catalogo_selezionato == "Listino Milwaukee":
                 sconto_applicato = sc_milw1
-                taglie_disponibili = ["U"] # Strumenti non hanno taglie solitamente
+                taglie_disponibili = ["U"] 
             
             st.divider()
             c1, c2 = st.columns([2, 1])
@@ -801,24 +801,25 @@ if st.session_state['carrello']:
                         except: pass
                         
                     if not has_image and dati.get("ExtraInfo"):
-                         # --- TESTO PLACEHOLDER JRC ---
-                         pdf.set_font("helvetica", "BI", 9)
-                         pdf.set_text_color(150, 0, 0) # Dark red per visibilità
-                         
-                         ln_h = 4
-                         lines = 4 
-                         text_height = lines * ln_h 
-                         
-                         y_pos_text = y_inizio + (h_box_right / 2) - (text_height / 2)
-                         
-                         pdf.set_xy(x_box_right, y_pos_text)
-                         
-                         placeholder_txt = f"immagine non disponibile,\ncercare sul sito jrc\ncon il codice:\n{dati['ExtraInfo']}"
-                         
-                         pdf.multi_cell(w_box_right, ln_h, placeholder_txt, border=0, align="C")
-                         
-                         pdf.set_text_color(0, 0, 0) # Reset
-                         y_fine_immagine = y_inizio + h_box_right
+                         # --- TESTO PLACEHOLDER JRC (Mantenuto per la sua regola) ---
+                         # Lo stampiamo solo se il modello proviene dal Listino JRC (capiamo dal tipo di codice_orig)
+                         # Milwaukee tenta di estrarre l'immagine da web, se fallisce al massimo lascerà vuoto (o puoi chiedere di aggiungere placeholder)
+                         # Per assicurarci di applicare la regola SOLO a JRC, possiamo fare un piccolo controllo aggiuntivo, ma per come è scritto ora si applicherebbe a tutti quelli che hanno ExtraInfo settato (cioè JRC e Milwaukee).
+                         # Se vuoi che su Milwaukee non compaia il testo rosso ma rimanga semplicemente senza foto, limitiamo la dicitura:
+                         if "JRC" in art or "JRC" in str(dati.get("ExtraInfo", "")).upper() or len(str(dati.get("ExtraInfo", ""))) > 0:
+                            if "JRC" in str(dati.get("Normativa", "")).upper() or "descrizione:" in str(dati.get("Normativa", "")).lower():
+                                # Un piccolo check: stampa il placeholder rosso solo se davvero non c'è l'immagine.
+                                pdf.set_font("helvetica", "BI", 9)
+                                pdf.set_text_color(150, 0, 0) # Dark red per visibilità
+                                ln_h = 4
+                                lines = 4 
+                                text_height = lines * ln_h 
+                                y_pos_text = y_inizio + (h_box_right / 2) - (text_height / 2)
+                                pdf.set_xy(x_box_right, y_pos_text)
+                                placeholder_txt = f"immagine non disponibile,\ncercare sul sito\ncon il codice:\n{dati['ExtraInfo']}"
+                                pdf.multi_cell(w_box_right, ln_h, placeholder_txt, border=0, align="C")
+                                pdf.set_text_color(0, 0, 0) # Reset
+                                y_fine_immagine = y_inizio + h_box_right
                     
                     pdf.set_y(max(y_fine_testo, y_fine_immagine) + 5)
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
