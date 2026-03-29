@@ -55,6 +55,25 @@ def cerca_immagine_jrc(codice):
     """
     return ""
 
+@st.cache_data
+def cerca_immagine_milw(codice):
+    """Cerca l'immagine sul sito Milwaukee usando il codice articolo."""
+    codice = str(codice).strip()
+    if not codice: return ""
+    
+    url_ricerca = f"https://it.milwaukeetool.eu/search/?search={codice}"
+    try:
+        res = requests.get(url_ricerca, headers=miei_headers, timeout=5)
+        if res.status_code == 200:
+            html = res.text
+            immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
+            for img in immagini:
+                img_lower = img.lower()
+                if "logo" not in img_lower and "icon" not in img_lower and (".jpg" in img_lower or ".png" in img_lower or ".webp" in img_lower):
+                    return urljoin(url_ricerca, img)
+    except: pass
+    return ""
+
 # =========================================================
 # --- GESTIONE ARCHIVIO LOCALE ---
 # =========================================================
@@ -67,7 +86,7 @@ def carica_storico():
             return json.load(f)
     except Exception: return {}
 
-def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_payper, sc_aw, sc_base, sc_atg, sc_jrc):
+def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_payper, sc_aw, sc_base, sc_atg, sc_jrc, sc_milw):
     if not cliente: return False, "⚠️ Inserisci almeno il Nome Cliente."
     if not carrello: return False, "⚠️ Il carrello è vuoto."
 
@@ -96,7 +115,7 @@ def salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_pay
     storico[id_univoco] = {
         "data_salvataggio": data_salvataggio, "cliente": cliente, "referente": referente, "note": note,
         "pagamento": pag, "trasporto": trasp, "validita": val,
-        "sconti_payper": sc_payper, "sconti_actionwear": sc_aw, "sconti_base": sc_base, "sconti_atg": sc_atg, "sconti_jrc": sc_jrc,
+        "sconti_payper": sc_payper, "sconti_actionwear": sc_aw, "sconti_base": sc_base, "sconti_atg": sc_atg, "sconti_jrc": sc_jrc, "sconti_milw": sc_milw,
         "carrello": carrello
     }
 
@@ -193,6 +212,25 @@ def carica_dati(path, tipo="base"):
             data['IMMAGINE'] = "" 
             data['CODICE_ORIGINALE'] = data['A'] 
             
+        elif tipo == "milw":
+            num_cols = len(data.columns)
+            if num_cols < 4:
+                for _ in range(4 - num_cols): data[f"Extra_{_}"] = ""
+            data = data.iloc[:, :4]
+            data.columns = ['A', 'B', 'C', 'D']
+            for col in ['A', 'B', 'C']: data[col] = data[col].fillna("").astype(str)
+            data['SEARCH_COL'] = data['A'] + " " + data['B'] + " " + data['C']
+            def build_art_milw(row):
+                parts = [row['A'], row['B'], row['C']]
+                return " - ".join([p.strip() for p in parts if p.strip() and str(p).lower() != 'nan'])
+            data['ARTICOLO'] = data.apply(build_art_milw, axis=1)
+            def pulisci_norm_milw(row):
+                return f"Articolo: {row['B']}\nDescrizione: {row['C']}"
+            data['NORMATIVA'] = data.apply(pulisci_norm_milw, axis=1)
+            data['LISTINO'] = data['D']
+            data['IMMAGINE'] = "" 
+            data['CODICE_ORIGINALE'] = data['A']
+            
         else:
             nomi_colonne = [str(c).strip().upper() for c in data.columns]
             if len(nomi_colonne) > 5: nomi_colonne[5] = 'NORMATIVA' 
@@ -215,6 +253,7 @@ df_atg = carica_dati('Listino_ATG.xlsx', "atg")
 df_payper = carica_dati('listino_payper.xlsx', "payper")
 df_actionwear = carica_dati('listino_actionwear.xlsx', "actionwear")
 df_jrc = carica_dati('listino_jrc.xlsx', "jrc")
+df_milw = carica_dati('listino_Milw.xlsx', "milw")
 
 # =========================================================
 # --- CALLBACKS ---
@@ -227,6 +266,7 @@ def aggiorna_prezzi_automaticamente():
     sc_b1 = st.session_state.get('sc_base1', 0.0)
     sc_a1 = st.session_state.get('sc_atg1', 0.0)
     sc_jrc1 = st.session_state.get('sc_jrc1', 0.0)
+    sc_milw1 = st.session_state.get('sc_milw1', 0.0)
     
     aggiornati = False
     for riga in st.session_state['carrello']:
@@ -251,12 +291,16 @@ def aggiorna_prezzi_automaticamente():
         elif df_jrc is not None and art in df_jrc['ARTICOLO'].values:
             listino = float(df_jrc[df_jrc['ARTICOLO'] == art].iloc[0]['LISTINO'])
             catalogo = "Listino JRC"
+        elif df_milw is not None and art in df_milw['ARTICOLO'].values:
+            listino = float(df_milw[df_milw['ARTICOLO'] == art].iloc[0]['LISTINO'])
+            catalogo = "Listino Milwaukee"
         
         if catalogo == "Listino Base": molt = (1 - sc_b1/100)
         elif catalogo == "Listino ATG": molt = (1 - sc_a1/100)
         elif catalogo == "Listino Payper": molt = (1 - sc_p1/100)
         elif catalogo == "Listino Actionwear": molt = (1 - sc_aw1/100)
         elif catalogo == "Listino JRC": molt = (1 - sc_jrc1/100)
+        elif catalogo == "Listino Milwaukee": molt = (1 - sc_milw1/100)
         else: continue
             
         nuovo_netto = arrotonda(listino * molt)
@@ -266,12 +310,12 @@ def aggiorna_prezzi_automaticamente():
         
     if aggiornati: st.session_state['msg_successo'] = "🔄 Prezzi ricalcolati in base ai nuovi sconti!"
 
-def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1):
-    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1)
+def esegui_azioni_finali(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1, sc_milw1):
+    succ_cl, msg_cl = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1, sc_milw1)
     st.session_state['esito_cloud'] = (succ_cl, msg_cl)
 
-def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1):
-    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1)
+def callback_salva_solo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1, sc_milw1):
+    succ, msg = salva_preventivo(cliente, referente, note, carrello, pag, trasp, val, sc_p1, sc_aw1, sc_b1, sc_a1, sc_jrc1, sc_milw1)
     if succ: st.session_state['msg_successo'] = msg
     else: st.session_state['msg_errore'] = msg
 
@@ -294,6 +338,7 @@ def esegui_caricamento(d):
     st.session_state['sc_base1'] = get_single_discount(d, 'sconti_base')
     st.session_state['sc_atg1'] = get_single_discount(d, 'sconti_atg')
     st.session_state['sc_jrc1'] = get_single_discount(d, 'sconti_jrc')
+    st.session_state['sc_milw1'] = get_single_discount(d, 'sconti_milw')
 
 def callback_aggiungi_taglie(articolo, img, normativa, prezzo, note_art, extra_info, taglie, catalogo):
     aggiunti = False
@@ -357,6 +402,10 @@ sc_atg1 = st.sidebar.number_input("Sc. ATG %", 0.0, 100.0, 0.0, key="sc_atg1", o
 st.sidebar.divider()
 st.sidebar.header("🧥 Sconto JRC")
 sc_jrc1 = st.sidebar.number_input("Sc. JRC %", 0.0, 100.0, 0.0, key="sc_jrc1", on_change=aggiorna_prezzi_automaticamente)
+
+st.sidebar.divider()
+st.sidebar.header("🛠️ Sconto Milwaukee")
+sc_milw1 = st.sidebar.number_input("Sc. Milwaukee %", 0.0, 100.0, 0.0, key="sc_milw1", on_change=aggiorna_prezzi_automaticamente)
 
 st.sidebar.divider()
 st.sidebar.header("⚖️ Condizioni Commerciali")
@@ -424,7 +473,7 @@ if 'msg_successo' in st.session_state: st.success(st.session_state.pop('msg_succ
 if 'msg_errore' in st.session_state: st.error(st.session_state.pop('msg_errore'))
 if 'msg_warning' in st.session_state: st.warning(st.session_state.pop('msg_warning'))
 
-if df_base is None and df_atg is None and df_payper is None and df_actionwear is None and df_jrc is None:
+if df_base is None and df_atg is None and df_payper is None and df_actionwear is None and df_jrc is None and df_milw is None:
     st.warning("⚠️ Nessun file Excel trovato.")
 else:
     ricerca = st.text_input("🟢 Inserisci nome modello (Ricerca Manuale):", placeholder="Cerca su tutto il catalogo...").upper()
@@ -456,6 +505,11 @@ else:
             if not r_jrc.empty:
                 r_jrc['CATALOGO_PROVENIENZA'] = "Listino JRC"
                 risultati_trovati.append(r_jrc)
+        if df_milw is not None:
+            r_milw = df_milw[df_milw['SEARCH_COL'].astype(str).str.upper().str.contains(ricerca, na=False)].copy()
+            if not r_milw.empty:
+                r_milw['CATALOGO_PROVENIENZA'] = "Listino Milwaukee"
+                risultati_trovati.append(r_milw)
         
         if risultati_trovati:
             risultato_completo = pd.concat(risultati_trovati, ignore_index=True)
@@ -464,16 +518,18 @@ else:
             
             catalogo_selezionato = d['CATALOGO_PROVENIENZA']
             
-            codice_orig_jrc = ""
+            codice_orig_extra = ""
             if catalogo_selezionato == "Listino JRC":
                 img_url_reale = cerca_immagine_jrc(d.get('CODICE_ORIGINALE', ''))
-                codice_orig_jrc = d.get('CODICE_ORIGINALE', '')
+                codice_orig_extra = d.get('CODICE_ORIGINALE', '')
+            elif catalogo_selezionato == "Listino Milwaukee":
+                img_url_reale = cerca_immagine_milw(d.get('CODICE_ORIGINALE', ''))
             else:
                 img_url_originale = str(d.get('IMMAGINE', '')).strip()
                 img_url_reale = estrai_immagine_da_web(img_url_originale)
             
             normativa_articolo = ""
-            if catalogo_selezionato in ["Listino Base", "Listino Payper", "Listino Actionwear", "Listino JRC"]:
+            if catalogo_selezionato in ["Listino Base", "Listino Payper", "Listino Actionwear", "Listino JRC", "Listino Milwaukee"]:
                 normativa_articolo = str(d.get('NORMATIVA', '')).strip()
             if normativa_articolo.lower() in ["nan", "none", "", "nat", "null"]: 
                 normativa_articolo = ""
@@ -493,6 +549,9 @@ else:
             elif catalogo_selezionato == "Listino JRC":
                 sconto_applicato = sc_jrc1
                 taglie_disponibili = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "5XL"]
+            elif catalogo_selezionato == "Listino Milwaukee":
+                sconto_applicato = sc_milw1
+                taglie_disponibili = ["U"] # Strumenti non hanno taglie solitamente
             
             st.divider()
             c1, c2 = st.columns([2, 1])
@@ -505,7 +564,7 @@ else:
                     
                 st.markdown(f"🏷️ **Prezzo di Listino:** {prezzo_listino:.2f} €")
                 if normativa_articolo:
-                    if catalogo_selezionato in ["Listino Payper", "Listino Actionwear", "Listino JRC"]:
+                    if catalogo_selezionato in ["Listino Payper", "Listino Actionwear", "Listino JRC", "Listino Milwaukee"]:
                         st.markdown(f"**Info:**\n{normativa_articolo}")
                     else:
                         st.markdown(f"🛡️ **Normativa:** {normativa_articolo}")
@@ -545,7 +604,7 @@ else:
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_taglie, 
-                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, codice_orig_jrc, taglie_disponibili, catalogo_selezionato)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, codice_orig_extra, taglie_disponibili, catalogo_selezionato)
                     )
                 else:
                     st.number_input("Quantità totale:", min_value=0, step=1, key='qta_generica_input')
@@ -560,7 +619,7 @@ else:
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_generico,
-                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, codice_orig_jrc)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, codice_orig_extra)
                     )
             with c2:
                 if img_url_reale and img_url_reale.startswith('http'):
@@ -604,7 +663,7 @@ if st.session_state['carrello']:
             "💾 Salva Preventivo", 
             use_container_width=True, 
             on_click=callback_salva_solo,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc_pay1, sc_aw1, sc1, sc_atg1, sc_jrc1)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc_pay1, sc_aw1, sc1, sc_atg1, sc_jrc1, sc_milw1)
         )
             
     with c_p4:
@@ -826,7 +885,7 @@ if st.session_state['carrello']:
             use_container_width=True,
             type="primary",
             on_click=esegui_azioni_finali,
-            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc_pay1, sc_aw1, sc1, sc_atg1, sc_jrc1)
+            args=(nome_cliente, nome_referente, note_preventivo, st.session_state['carrello'], campo_pagamento, campo_trasporto, campo_validita, sc_pay1, sc_aw1, sc1, sc_atg1, sc_jrc1, sc_milw1)
         )
         if 'esito_cloud' in st.session_state:
             if st.session_state['esito_cloud'][0]: st.success(st.session_state['esito_cloud'][1])
