@@ -49,40 +49,10 @@ def estrai_immagine_da_web(url):
 
 @st.cache_data
 def cerca_immagine_jrc(codice):
-    """Cerca attivamente sul sito James Ross usando un metodo universale basato sul codice."""
-    codice = str(codice).strip()
-    if not codice: return ""
-    
-    url_ricerca = f"https://www.jamesross.it/it/ricerca?q={codice}"
-    try:
-        res = requests.get(url_ricerca, headers=miei_headers, timeout=5)
-        if res.status_code == 200:
-            html = res.text
-            
-            # Estraiamo tutte le immagini dalla pagina dei risultati
-            immagini = re.findall(r'<img[^>]+src="([^"]+)"', html)
-            
-            img_valide = []
-            for img in immagini:
-                img_lower = img.lower()
-                # Scartiamo spazzatura visiva
-                if any(x in img_lower for x in ["logo", "icon", "svg", "banner", "spinner", "loader"]):
-                    continue
-                if any(img_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-                    img_valide.append(img)
-            
-            # 1. Ricerca Universale: Il nome dell'immagine contiene il codice?
-            # Puliamo il codice da trattini o spazi per fare un match più sicuro
-            codice_pulito = re.sub(r'[^a-zA-Z0-9]', '', codice.lower())
-            for img in img_valide:
-                nome_img_pulito = re.sub(r'[^a-zA-Z0-9]', '', img.lower())
-                if codice_pulito in nome_img_pulito:
-                    return urljoin(url_ricerca, img)
-            
-            # 2. Fallback intelligente: Se non c'è il codice esatto, prende la prima foto vera di prodotto
-            if img_valide:
-                return urljoin(url_ricerca, img_valide[0])
-    except: pass
+    """
+    Universale: DISABILITATO. Non cerchiamo più nulla su JRC
+    perché il metodo è troppo instabile.
+    """
     return ""
 
 # =========================================================
@@ -325,7 +295,7 @@ def esegui_caricamento(d):
     st.session_state['sc_atg1'] = get_single_discount(d, 'sconti_atg')
     st.session_state['sc_jrc1'] = get_single_discount(d, 'sconti_jrc')
 
-def callback_aggiungi_taglie(articolo, img, normativa, prezzo, note_art, taglie, catalogo):
+def callback_aggiungi_taglie(articolo, img, normativa, prezzo, note_art, extra_info, taglie, catalogo):
     aggiunti = False
     st.session_state['ultima_modalita'] = "Specifica Taglie"
     for t in taglie:
@@ -336,21 +306,21 @@ def callback_aggiungi_taglie(articolo, img, normativa, prezzo, note_art, taglie,
                 "Articolo": articolo, "Taglia": t, "Quantità": q,
                 "Netto U.": f"{arrotonda(prezzo):.2f} €", 
                 "Totale Riga": arrotonda(prezzo * q),
-                "Immagine": img, "Normativa": normativa, "NoteArticolo": note_art
+                "Immagine": img, "Normativa": normativa, "NoteArticolo": note_art, "ExtraInfo": extra_info
             })
             st.session_state[key] = 0  
             aggiunti = True
     if aggiunti: st.session_state['msg_successo'] = "Aggiunto!"
 
-def callback_aggiungi_generico(articolo, img, normativa, prezzo, note_art):
+def callback_aggiungi_generico(articolo, img, normativa, prezzo, note_art, extra_info):
     st.session_state['ultima_modalita'] = "Solo Modello/Vetrina"
     q = st.session_state.get('qta_generica_input', 0)
     st.session_state['carrello'].append({
         "Articolo": articolo, "Taglia": "-", "Quantità": q,
         "Netto U.": f"{arrotonda(prezzo):.2f} €", 
         "Totale Riga": arrotonda(prezzo * q),
-        "Immagine": img, "Normativa": normativa, "NoteArticolo": note_art
-    })
+        "Immagine": img, "Normativa": normativa, "NoteArticolo": note_art, "ExtraInfo": extra_info
+            })
     st.session_state['qta_generica_input'] = 0  
     st.session_state['msg_successo'] = "Aggiunto!"
 
@@ -494,8 +464,10 @@ else:
             
             catalogo_selezionato = d['CATALOGO_PROVENIENZA']
             
+            codice_orig_jrc = ""
             if catalogo_selezionato == "Listino JRC":
                 img_url_reale = cerca_immagine_jrc(d.get('CODICE_ORIGINALE', ''))
+                codice_orig_jrc = d.get('CODICE_ORIGINALE', '')
             else:
                 img_url_originale = str(d.get('IMMAGINE', '')).strip()
                 img_url_reale = estrai_immagine_da_web(img_url_originale)
@@ -573,7 +545,7 @@ else:
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_taglie, 
-                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, taglie_disponibili, catalogo_selezionato)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, codice_orig_jrc, taglie_disponibili, catalogo_selezionato)
                     )
                 else:
                     st.number_input("Quantità totale:", min_value=0, step=1, key='qta_generica_input')
@@ -588,7 +560,7 @@ else:
                         use_container_width=True, 
                         type="primary", 
                         on_click=callback_aggiungi_generico,
-                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input)
+                        args=(d['ARTICOLO'], img_url_reale, normativa_articolo, prezzo_netto_finale, note_articolo_input, codice_orig_jrc)
                     )
             with c2:
                 if img_url_reale and img_url_reale.startswith('http'):
@@ -646,7 +618,7 @@ if st.session_state['carrello']:
                     label_prezzo = "Prezzo Netto:"
                             
                     if art not in raggruppo:
-                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto": r["Netto U."], "Normativa": r.get("Normativa", ""), "Label": label_prezzo, "NoteArticolo": r.get("NoteArticolo", "")}
+                        raggruppo[art] = {"T": [], "Tot": 0, "Img": r["Immagine"], "Netto": r["Netto U."], "Normativa": r.get("Normativa", ""), "Label": label_prezzo, "NoteArticolo": r.get("NoteArticolo", ""), "ExtraInfo": r.get("ExtraInfo", "")}
                     
                     if r["Quantità"] > 0:
                         if r["Taglia"] == "-": raggruppo[art]["T"].append(f"Q.tà: {r['Quantità']}pz")
@@ -730,6 +702,12 @@ if st.session_state['carrello']:
                     
                     y_fine_testo = pdf.get_y()
                     y_fine_immagine = y_inizio
+                    
+                    x_box_right = 140
+                    w_box_right = 55
+                    h_box_right = 55
+                    
+                    has_image = False
                     if dati["Img"] and dati["Img"].startswith("http"):
                         try:
                             res = requests.get(dati["Img"], headers=miei_headers, timeout=5)
@@ -759,8 +737,29 @@ if st.session_state['carrello']:
                                         tmp_name = tmp.name
                                         
                                     pdf.image(tmp_name, x=x_pos, y=y_pos, w=final_w, h=final_h)
-                                    y_fine_immagine = y_inizio + max_box
+                                    y_fine_immagine = y_inizio + h_box_right
+                                    has_image = True
                         except: pass
+                        
+                    if not has_image and dati.get("ExtraInfo"):
+                         # --- TESTO PLACEHOLDER JRC ---
+                         pdf.set_font("helvetica", "BI", 9)
+                         pdf.set_text_color(150, 0, 0) # Dark red per visibilità
+                         
+                         ln_h = 4
+                         lines = 4 
+                         text_height = lines * ln_h 
+                         
+                         y_pos_text = y_inizio + (h_box_right / 2) - (text_height / 2)
+                         
+                         pdf.set_xy(x_box_right, y_pos_text)
+                         
+                         placeholder_txt = f"immagine non disponibile,\ncercare sul sito jrc\ncon il codice:\n{dati['ExtraInfo']}"
+                         
+                         pdf.multi_cell(w_box_right, ln_h, placeholder_txt, border=0, align="C")
+                         
+                         pdf.set_text_color(0, 0, 0) # Reset
+                         y_fine_immagine = y_inizio + h_box_right
                     
                     pdf.set_y(max(y_fine_testo, y_fine_immagine) + 5)
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
